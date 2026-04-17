@@ -24,8 +24,8 @@ Pattern-match first, LLM fallback for ambiguous cases. Exactly one of:
 
 ## Step 2 — Fan out (parallel, all three concurrent)
 
-Fire these three concurrently. Do NOT run them serially:
+Use the clawflow fan-out pattern (forked from `srikanth235/clawflow`). Fire these three concurrently. Do NOT run them serially:
 
 1. **Route** — invoke the `route` skill to pick the destination bucket.
 2. **Memory** — invoke the `memory` skill to extract project state and personal signals. Memory MUST commit before the ack returns.
-3. **Ack** — invoke the `answer` skill to generate a 1-sentence reply. Return to Discord within ~1s.
+3. **Ack** — invoke the `answer` skill to generate a 1-sentence reply. Send reply via `steipete/discord`. Return to Discord within ~1s.

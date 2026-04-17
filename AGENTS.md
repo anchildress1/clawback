@@ -109,7 +109,7 @@ OpenClaw plugins run **in-process, unsandboxed**. The install scanner enforces s
 
 | Layer | Lives in | Does | Cannot do |
 |---|---|---|---|
-| **Plugin code** (`src/index.ts`) | Compiled JS loaded by `openclaw.extensions` | Register tools, hooks, commands. Read/write files via `fs`. Access `api.logger`, `api.getConfig()`. | Use `child_process`, `eval`, or dynamic code generation. Blocked by install scanner. |
+| **Plugin code** (`src/index.ts`) | Compiled JS loaded by `openclaw.extensions` | Register tools, hooks, commands. Read/write files via `fs`. Access `api.logger`, `api.pluginConfig`. | Use `child_process`, `eval`, or dynamic code generation. Blocked by install scanner. |
 | **Skills** (`skills/*/SKILL.md`) | Markdown injected into the agent's system prompt | Teach the agent *when and how* to use tools. Orchestrate multi-step workflows. Reference the built-in `exec` tool for system commands. | Call each other directly. Skills are prompt text, not code. |
 
 **The connection between them is implicit.** A SKILL.md says "call `clawback_write_capture`" by name; the agent resolves it to the registered tool. There is no programmatic invocation from skill to tool.
@@ -145,7 +145,7 @@ Available on the `api` parameter in `register(api)`:
 - `api.registerTool()` — register a callable tool (name, label, description, parameters, execute)
 - `api.registerHook()` — register lifecycle hooks (e.g., `before_agent_start`)
 - `api.registerCommand()` — register slash commands
-- `api.getConfig()` — read plugin config from `openclaw.plugin.json` configSchema
+- `api.pluginConfig` — plugin config object (from `openclaw.plugin.json` configSchema). Property, not a method.
 - `api.logger` — scoped logger (debug/info/warn/error). **Use this, not `console.log`.**
 - `api.rootDir` — plugin root directory
 - `api.resolvePath()` — resolve paths relative to plugin root
@@ -281,6 +281,8 @@ Valid YAML frontmatter. Multi-line is allowed when needed (e.g., `description: >
 - Don't use `child_process` in plugin code. Use skill instructions + OpenClaw `exec` tool.
 - Don't install phantom npm packages. `openclaw/plugin-sdk/*` is a runtime module, not an npm dep.
 - Don't use `console.log`. Use `api.logger`.
+- Don't use `api.getConfig()`. It doesn't exist. Use `api.pluginConfig` (property, not method).
+- Don't leave Discord `groupPolicy` as `allowlist` without entries — messages arrive but silently never dispatch to the agent.
 - Don't rebuild OpenClaw's session memory. Use it.
 - Don't pre-scaffold vault buckets. Agent builds them from first captures.
 - Don't add features that only display/report without learning.

@@ -1,7 +1,8 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { Type } from "@sinclair/typebox";
-import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, statSync } from "fs";
-import { join, resolve } from "path";
+import { readFileSync, writeFileSync, appendFileSync, readdirSync, existsSync, mkdirSync, statSync } from "fs";
+import { join, resolve, relative, sep } from "path";
+import { homedir } from "os";
 import yaml from "js-yaml";
 const SLUG_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 function validateSlug(slug) {
@@ -12,13 +13,16 @@ function validateSlug(slug) {
 function assertWithinBase(basePath, targetPath) {
     const resolved = resolve(targetPath);
     const base = resolve(basePath);
-    if (!resolved.startsWith(base + "/") && resolved !== base) {
+    if (resolved === base)
+        return;
+    const rel = relative(base, resolved);
+    if (rel.startsWith("..") || rel.startsWith(sep) || /^[a-zA-Z]:/.test(rel)) {
         throw new Error(`Path traversal blocked: ${resolved} is outside ${base}`);
     }
 }
-function getVaultPath(config) {
-    const raw = config.vaultPath || "~/clawback-vault";
-    return raw.replace(/^~/, process.env.HOME || "");
+function getVaultPath(pluginConfig) {
+    const raw = pluginConfig.vaultPath || "~/clawback-vault";
+    return raw.replace(/^~/, homedir());
 }
 function readBucketManifest(vaultPath) {
     const bucketsDir = join(vaultPath, "OpenClaw", "buckets");
@@ -65,7 +69,7 @@ function parseFrontmatter(content) {
         "last-commit": "",
         repos: [],
     };
-    const match = RegExp(/^---\n([\s\S]*?)\n---/).exec(content);
+    const match = RegExp(/^---\r?\n([\s\S]*?)\r?\n---/).exec(content);
     if (!match)
         return defaults;
     let raw;
@@ -94,8 +98,7 @@ function writeCapture(vaultPath, slug, text, timestamp) {
     const capturesFile = join(bucketDir, "captures.md");
     const entry = `\n---\n**${timestamp}**\n${text}\n`;
     if (existsSync(capturesFile)) {
-        const existing = readFileSync(capturesFile, "utf-8");
-        writeFileSync(capturesFile, existing + entry);
+        appendFileSync(capturesFile, entry);
     }
     else {
         writeFileSync(capturesFile, `# Captures — ${slug}\n${entry}`);
@@ -105,8 +108,7 @@ function writeInbox(vaultPath, text, timestamp) {
     const inboxFile = join(vaultPath, "_inbox.md");
     const entry = `\n---\n**${timestamp}**\n${text}\n`;
     if (existsSync(inboxFile)) {
-        const existing = readFileSync(inboxFile, "utf-8");
-        writeFileSync(inboxFile, existing + entry);
+        appendFileSync(inboxFile, entry);
     }
     else {
         writeFileSync(inboxFile, `# Inbox\n\nLow-confidence captures. Review and route manually or correct with ❌.\n${entry}`);
@@ -126,7 +128,7 @@ export default definePluginEntry({
                 "Use this before routing a capture to see what buckets exist.",
             parameters: Type.Object({}),
             async execute() {
-                const vaultPath = getVaultPath(api.getConfig());
+                const vaultPath = getVaultPath(api.pluginConfig);
                 const manifest = readBucketManifest(vaultPath);
                 return {
                     content: [{ type: "text", text: JSON.stringify(manifest, null, 2) }],
@@ -146,7 +148,7 @@ export default definePluginEntry({
             }),
             async execute(_toolCallId, params) {
                 const { slug, text } = params;
-                const vaultPath = getVaultPath(api.getConfig());
+                const vaultPath = getVaultPath(api.pluginConfig);
                 const timestamp = new Date().toISOString();
                 writeCapture(vaultPath, slug, text, timestamp);
                 return {
@@ -168,7 +170,7 @@ export default definePluginEntry({
             }),
             async execute(_toolCallId, params) {
                 const { text } = params;
-                const vaultPath = getVaultPath(api.getConfig());
+                const vaultPath = getVaultPath(api.pluginConfig);
                 const timestamp = new Date().toISOString();
                 writeInbox(vaultPath, text, timestamp);
                 return {
@@ -192,7 +194,7 @@ export default definePluginEntry({
             async execute(_toolCallId, params) {
                 const { slug, description } = params;
                 validateSlug(slug);
-                const vaultPath = getVaultPath(api.getConfig());
+                const vaultPath = getVaultPath(api.pluginConfig);
                 const bucketsBase = join(vaultPath, "OpenClaw", "buckets");
                 const bucketDir = join(bucketsBase, slug);
                 assertWithinBase(bucketsBase, bucketDir);
@@ -240,7 +242,7 @@ export default definePluginEntry({
                 "Use when the user asks for status, overview, or 'how are things'.",
             parameters: Type.Object({}),
             async execute() {
-                const vaultPath = getVaultPath(api.getConfig());
+                const vaultPath = getVaultPath(api.pluginConfig);
                 const manifest = readBucketManifest(vaultPath);
                 if (manifest.length === 0) {
                     return {
@@ -262,7 +264,7 @@ export default definePluginEntry({
                 const now = Date.now();
                 const bucketLines = manifest.map((b) => {
                     const emoji = stateEmoji[b.state] || "❓";
-                    const capturesFile = join(getVaultPath(api.getConfig()), "OpenClaw", "buckets", b.slug, "captures.md");
+                    const capturesFile = join(vaultPath, "OpenClaw", "buckets", b.slug, "captures.md");
                     const totalCaptures = existsSync(capturesFile)
                         ? readFileSync(capturesFile, "utf-8").split("\n---\n").filter((chunk) => chunk.includes("**")).length
                         : 0;
@@ -287,7 +289,7 @@ export default definePluginEntry({
         });
         // --- Boot: log manifest on start ---
         api.registerHook("before_agent_start", { name: "clawback_boot" }, async () => {
-            const vaultPath = getVaultPath(api.getConfig());
+            const vaultPath = getVaultPath(api.pluginConfig);
             const manifest = readBucketManifest(vaultPath);
             api.logger.info(`manifest loaded: ${manifest.length} buckets.`);
             for (const b of manifest) {

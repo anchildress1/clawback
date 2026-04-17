@@ -41,8 +41,9 @@ Do these steps in order:
    - `git commit -m "capture: <short summary>"` (skip if nothing staged)
    - `git pull --rebase --autostash`
    - `git push`
-5. Reply to the user in Discord with a 1-sentence ack. Include the destination bucket name. Add 👍.
+5. Reply to the user in Discord with a 1-sentence ack. Include the destination bucket name.
    Keep it terse. Do NOT summarize what was captured — the user already knows.
+   Emojis are fine but limit to 2-3 per reply. Pick a small set and stick with them — don't rotate through every emoji in existence.
 
 **NEVER ask the user which bucket.** Always default-route. Wrong routes get corrected via ❌ reaction.
 

@@ -106,6 +106,21 @@ export function writeInbox(vaultPath, text, timestamp) {
     }
 }
 // --- Auto-discovery ---
+function scaffoldBucket(bucketsDir, slug) {
+    const description = `Auto-discovered from vault folder "${slug}"`;
+    const bucketMd = stringifyMatter({ slug, description, aliases: [], state: "active", "last-commit": "", repos: [] }, `\n# ${slug}\n\n${description}\n`);
+    writeFileSync(join(bucketsDir, slug, "_bucket.md"), bucketMd);
+    const files = [
+        ["captures.md", `# Captures — ${slug}\n`],
+        ["memory.md", `# Memory — ${slug}\n`],
+        ["future-me.md", `# Future Me — ${slug}\n\nTangent captures parked here for later.\n`],
+    ];
+    for (const [name, content] of files) {
+        const filePath = join(bucketsDir, slug, name);
+        if (!existsSync(filePath))
+            writeFileSync(filePath, content);
+    }
+}
 export function autoDiscoverBuckets(vaultPath) {
     const bucketsDir = join(vaultPath, "OpenClaw", "buckets");
     if (!existsSync(bucketsDir))
@@ -116,23 +131,10 @@ export function autoDiscoverBuckets(vaultPath) {
             continue;
         if (!SLUG_PATTERN.test(entry.name))
             continue;
-        const bucketFile = join(bucketsDir, entry.name, "_bucket.md");
-        if (!existsSync(bucketFile)) {
-            const slug = entry.name;
-            const description = `Auto-discovered from vault folder "${slug}"`;
-            const bucketMd = stringifyMatter({ slug, description, aliases: [], state: "active", "last-commit": "", repos: [] }, `\n# ${slug}\n\n${description}\n`);
-            writeFileSync(bucketFile, bucketMd);
-            const capturesFile = join(bucketsDir, slug, "captures.md");
-            if (!existsSync(capturesFile))
-                writeFileSync(capturesFile, `# Captures — ${slug}\n`);
-            const memoryFile = join(bucketsDir, slug, "memory.md");
-            if (!existsSync(memoryFile))
-                writeFileSync(memoryFile, `# Memory — ${slug}\n`);
-            const futureFile = join(bucketsDir, slug, "future-me.md");
-            if (!existsSync(futureFile))
-                writeFileSync(futureFile, `# Future Me — ${slug}\n\nTangent captures parked here for later.\n`);
-            discovered.push(slug);
-        }
+        if (existsSync(join(bucketsDir, entry.name, "_bucket.md")))
+            continue;
+        scaffoldBucket(bucketsDir, entry.name);
+        discovered.push(entry.name);
     }
     return discovered;
 }

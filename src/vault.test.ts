@@ -167,7 +167,7 @@ describe("autoDiscoverBuckets", () => {
     mkdirSync(join(bucketsDir, "fitness"), { recursive: true });
 
     const discovered = autoDiscoverBuckets(vault);
-    expect(discovered.sort()).toEqual(["architect", "fitness"]);
+    expect(discovered.toSorted((a, b) => a.localeCompare(b))).toEqual(["architect", "fitness"]);
 
     // Verify files created
     for (const slug of discovered) {

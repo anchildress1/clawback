@@ -450,8 +450,18 @@ export default definePluginEntry({
                 const { sourceSlug, newSlug, description } = params;
                 validateSlug(sourceSlug);
                 validateSlug(newSlug);
+                if (sourceSlug === newSlug) {
+                    throw new Error("Cannot promote into the same bucket.");
+                }
                 const vaultPath = getVaultPath(api.pluginConfig);
                 const bucketsBase = join(vaultPath, "OpenClaw", "buckets");
+                // Reject if destination already exists
+                const newBucketDir = join(bucketsBase, newSlug);
+                assertWithinBase(bucketsBase, newBucketDir);
+                if (existsSync(newBucketDir)) {
+                    throw new Error(`Bucket ${newSlug} already exists. Promotion creates a new bucket.`);
+                }
+                // Read source future-me.md
                 const futureFile = join(bucketsBase, sourceSlug, "future-me.md");
                 assertWithinBase(bucketsBase, futureFile);
                 if (!existsSync(futureFile)) {
@@ -463,23 +473,22 @@ export default definePluginEntry({
                 if (entryChunks.length === 0) {
                     throw new Error(`No entries in ${sourceSlug}/future-me.md to promote.`);
                 }
+                // Extract the last entry (don't remove from source yet)
                 const lastEntry = entryChunks[entryChunks.length - 1];
-                const lastIndex = chunks.lastIndexOf(lastEntry);
-                chunks.splice(lastIndex, 1);
-                writeFileSync(futureFile, chunks.join("\n---\n"));
                 const tsMatch = /\*\*(.+?)\*\*/.exec(lastEntry);
                 const timestamp = tsMatch ? tsMatch[1] : new Date().toISOString();
                 const captureText = lastEntry.replace(/\*\*.*?\*\*\n?/, "").trim();
-                const newBucketDir = join(bucketsBase, newSlug);
-                assertWithinBase(bucketsBase, newBucketDir);
-                if (!existsSync(newBucketDir)) {
-                    mkdirSync(newBucketDir, { recursive: true });
-                    const bucketMd = stringifyMatter({ slug: newSlug, description, aliases: [], state: "active", "last-commit": "", repos: [] }, `\n# ${newSlug}\n\n${description}\n`);
-                    writeFileSync(join(newBucketDir, "_bucket.md"), bucketMd);
-                    writeFileSync(join(newBucketDir, "memory.md"), `# Memory — ${newSlug}\n`);
-                    writeFileSync(join(newBucketDir, "future-me.md"), `# Future Me — ${newSlug}\n\nTangent captures parked here for later.\n`);
-                }
+                // Write destination first — if this fails, source is untouched
+                mkdirSync(newBucketDir, { recursive: true });
+                const bucketMd = stringifyMatter({ slug: newSlug, description, aliases: [], state: "active", "last-commit": "", repos: [] }, `\n# ${newSlug}\n\n${description}\n`);
+                writeFileSync(join(newBucketDir, "_bucket.md"), bucketMd);
+                writeFileSync(join(newBucketDir, "memory.md"), `# Memory — ${newSlug}\n`);
+                writeFileSync(join(newBucketDir, "future-me.md"), `# Future Me — ${newSlug}\n\nTangent captures parked here for later.\n`);
                 writeCapture(vaultPath, newSlug, captureText, timestamp);
+                // Destination succeeded — now remove from source
+                const lastIndex = chunks.lastIndexOf(lastEntry);
+                chunks.splice(lastIndex, 1);
+                writeFileSync(futureFile, chunks.join("\n---\n"));
                 return {
                     content: [
                         { type: "text", text: `Promoted to ${newSlug}. 🎯` },

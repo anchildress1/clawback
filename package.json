@@ -1,0 +1,21 @@
+{
+  "name": "clawback",
+  "version": "0.1.0",
+  "description": "ADHD-friendly OpenClaw plugin that routes Discord captures into an Obsidian vault by project, with memory that learns how you work.",
+  "main": "src/index.ts",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/anchildress1/clawback.git"
+  },
+  "keywords": ["openclaw", "plugin", "obsidian", "discord", "adhd"],
+  "author": "Ashley Childress",
+  "license": "MIT",
+  "type": "module",
+  "bugs": {
+    "url": "https://github.com/anchildress1/clawback/issues"
+  },
+  "homepage": "https://github.com/anchildress1/clawback#readme"
+}

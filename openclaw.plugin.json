@@ -1,0 +1,47 @@
+{
+  "id": "clawback",
+  "name": "Clawback",
+  "description": "ADHD-friendly agent that routes Discord captures into an Obsidian vault by project bucket, with memory that learns how you work.",
+  "version": "0.1.0",
+  "skills": ["./skills"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["discordToken", "githubPat"],
+    "properties": {
+      "discordToken": {
+        "type": "string",
+        "description": "Discord bot token"
+      },
+      "githubPat": {
+        "type": "string",
+        "description": "GitHub personal access token with repo:read scope"
+      },
+      "vaultPath": {
+        "type": "string",
+        "description": "Absolute path to the Obsidian vault root on the VM",
+        "default": "~/clawback-vault"
+      },
+      "devToUsername": {
+        "type": "string",
+        "description": "DEV.to username for watcher polling"
+      }
+    }
+  },
+  "uiHints": {
+    "discordToken": {
+      "label": "Discord Bot Token",
+      "sensitive": true
+    },
+    "githubPat": {
+      "label": "GitHub PAT",
+      "sensitive": true
+    },
+    "vaultPath": {
+      "label": "Vault Path"
+    },
+    "devToUsername": {
+      "label": "DEV.to Username"
+    }
+  }
+}

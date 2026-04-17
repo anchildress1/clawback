@@ -12,22 +12,29 @@
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "openclaw": {
-    "extensions": ["./dist/index.js"]
+    "extensions": [
+      "./dist/index.js"
+    ]
   },
   "dependencies": {
     "@sinclair/typebox": "^0.34.0",
-    "js-yaml": "^4.1.0"
+    "yaml": "^2.8.3"
   },
   "devDependencies": {
-    "typescript": "^5.7.0",
     "@types/node": "^22.0.0",
-    "@types/js-yaml": "^4.0.0"
+    "typescript": "^5.7.0"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/anchildress1/clawback.git"
   },
-  "keywords": ["openclaw", "plugin", "obsidian", "discord", "adhd"],
+  "keywords": [
+    "openclaw",
+    "plugin",
+    "obsidian",
+    "discord",
+    "adhd"
+  ],
   "author": "Ashley Childress",
   "license": "SEE LICENSE IN LICENSE",
   "type": "module",

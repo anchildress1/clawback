@@ -3,7 +3,7 @@ import { Type } from "@sinclair/typebox";
 import { readFileSync, writeFileSync, appendFileSync, readdirSync, existsSync, mkdirSync, statSync } from "fs";
 import { join, resolve, relative, sep } from "path";
 import { homedir } from "os";
-import yaml from "js-yaml";
+import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 const SLUG_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 function validateSlug(slug) {
     if (!SLUG_PATTERN.test(slug) || slug.length > 64) {
@@ -35,83 +35,46 @@ function readBucketManifest(vaultPath) {
         const bucketFile = join(bucketsDir, slug.name, "_bucket.md");
         if (!existsSync(bucketFile))
             continue;
-        const content = readFileSync(bucketFile, "utf-8");
-        const frontmatter = parseFrontmatter(content);
+        const { data: fm } = matter(readFileSync(bucketFile, "utf-8"));
         const capturesFile = join(bucketsDir, slug.name, "captures.md");
         const recentCaptures = existsSync(capturesFile)
             ? readFileSync(capturesFile, "utf-8")
                 .split("\n---\n")
-                .filter((chunk) => chunk.includes("**")) // captures have **timestamp** — skip heading preamble
+                .filter((chunk) => chunk.includes("**"))
                 .slice(-3)
             : [];
         entries.push({
             slug: slug.name,
-            description: frontmatter.description,
-            aliases: frontmatter.aliases,
-            state: frontmatter.state,
-            lastCommit: frontmatter["last-commit"],
-            repos: frontmatter.repos,
+            description: fm.description,
+            aliases: fm.aliases,
+            state: fm.state,
+            lastCommit: fm["last-commit"],
+            repos: fm.repos,
             recentCaptures,
         });
     }
     return entries;
 }
-function toStringArray(value) {
-    if (!Array.isArray(value))
-        return [];
-    return value.filter((v) => typeof v === "string");
-}
-function parseFrontmatter(content) {
-    const defaults = {
-        description: "",
-        aliases: [],
-        state: "active",
-        "last-commit": "",
-        repos: [],
-    };
-    const match = RegExp(/^---\r?\n([\s\S]*?)\r?\n---/).exec(content);
+const BUCKET_DEFAULTS = {
+    slug: "",
+    description: "",
+    aliases: [],
+    state: "active",
+    "last-commit": "",
+    repos: [],
+};
+function matter(input) {
+    const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(input);
     if (!match)
-        return defaults;
-    let raw;
-    try {
-        raw = yaml.load(match[1]) ?? {};
-    }
-    catch {
-        return defaults;
-    }
+        return { data: { ...BUCKET_DEFAULTS }, content: input };
+    const raw = parseYaml(match[1]) ?? {};
     return {
-        description: typeof raw["description"] === "string" ? raw["description"] : defaults.description,
-        aliases: toStringArray(raw["aliases"]),
-        state: typeof raw["state"] === "string" ? raw["state"] : defaults.state,
-        "last-commit": typeof raw["last-commit"] === "string" ? raw["last-commit"] : defaults["last-commit"],
-        repos: toStringArray(raw["repos"]),
+        data: { ...BUCKET_DEFAULTS, ...raw },
+        content: input.slice(match[0].length),
     };
 }
-function serializeFrontmatter(fm, slug, bodyAfterFrontmatter) {
-    const aliasesLine = fm.aliases.length > 0
-        ? `aliases:\n${fm.aliases.map((a) => `  - ${a}`).join("\n")}`
-        : "aliases: []";
-    const reposLine = fm.repos.length > 0
-        ? `repos:\n${fm.repos.map((r) => `  - ${r}`).join("\n")}`
-        : "repos: []";
-    const lines = [
-        "---",
-        `slug: ${slug}`,
-        `description: ${fm.description}`,
-        aliasesLine,
-        `state: ${fm.state}`,
-        `last-commit: ${fm["last-commit"]}`,
-        reposLine,
-        "---",
-    ];
-    const body = bodyAfterFrontmatter ?? `\n# ${slug}\n\n${fm.description}\n`;
-    return lines.join("\n") + body;
-}
-function readBodyAfterFrontmatter(content) {
-    const match = RegExp(/^---\r?\n[\s\S]*?\r?\n---/).exec(content);
-    if (!match)
-        return content;
-    return content.slice(match[0].length);
+function stringifyMatter(data, content) {
+    return `---\n${stringifyYaml(data).trim()}\n---${content}`;
 }
 function writeCapture(vaultPath, slug, text, timestamp) {
     validateSlug(slug);
@@ -233,22 +196,8 @@ export default definePluginEntry({
                     };
                 }
                 mkdirSync(bucketDir, { recursive: true });
-                const frontmatter = [
-                    "---",
-                    `slug: ${slug}`,
-                    `description: ${description}`,
-                    "aliases: []",
-                    "state: active",
-                    "last-commit: ",
-                    "repos: []",
-                    "---",
-                    "",
-                    `# ${slug}`,
-                    "",
-                    description,
-                    "",
-                ].join("\n");
-                writeFileSync(join(bucketDir, "_bucket.md"), frontmatter);
+                const bucketMd = stringifyMatter({ slug, description, aliases: [], state: "active", "last-commit": "", repos: [] }, `\n# ${slug}\n\n${description}\n`);
+                writeFileSync(join(bucketDir, "_bucket.md"), bucketMd);
                 writeFileSync(join(bucketDir, "captures.md"), `# Captures — ${slug}\n`);
                 writeFileSync(join(bucketDir, "memory.md"), `# Memory — ${slug}\n`);
                 writeFileSync(join(bucketDir, "future-me.md"), `# Future Me — ${slug}\n\nTangent captures parked here for later.\n`);
@@ -442,8 +391,7 @@ export default definePluginEntry({
                 if (!existsSync(bucketFile)) {
                     throw new Error(`Bucket ${slug} does not exist.`);
                 }
-                const content = readFileSync(bucketFile, "utf-8");
-                const fm = parseFrontmatter(content);
+                const { data: fm, content: body } = matter(readFileSync(bucketFile, "utf-8"));
                 const normalized = alias.toLowerCase().trim();
                 if (fm.aliases.includes(normalized)) {
                     return {
@@ -452,8 +400,7 @@ export default definePluginEntry({
                     };
                 }
                 fm.aliases.push(normalized);
-                const body = readBodyAfterFrontmatter(content);
-                writeFileSync(bucketFile, serializeFrontmatter(fm, slug, body));
+                writeFileSync(bucketFile, stringifyMatter(fm, body));
                 return {
                     content: [{ type: "text", text: `Alias added to ${slug}.` }],
                     details: { added: true, alias: normalized },
@@ -492,16 +439,14 @@ export default definePluginEntry({
                 if (!existsSync(bucketFile)) {
                     throw new Error(`Bucket ${slug} does not exist.`);
                 }
-                const content = readFileSync(bucketFile, "utf-8");
-                const fm = parseFrontmatter(content);
+                const { data: fm, content: body } = matter(readFileSync(bucketFile, "utf-8"));
                 const allowed = transitions[fm.state] ?? [];
                 if (!allowed.includes(newState)) {
                     throw new Error(`Cannot transition ${slug} from "${fm.state}" to "${newState}". ` +
                         `Allowed: ${allowed.length > 0 ? allowed.join(", ") : "none (terminal state)"}.`);
                 }
                 fm.state = newState;
-                const body = readBodyAfterFrontmatter(content);
-                writeFileSync(bucketFile, serializeFrontmatter(fm, slug, body));
+                writeFileSync(bucketFile, stringifyMatter(fm, body));
                 return {
                     content: [
                         { type: "text", text: `${slug} → ${newState}.` },

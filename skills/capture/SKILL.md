@@ -36,7 +36,11 @@ Do these steps in order:
    - If nothing matches → low confidence. Use inbox.
 3. If high or medium confidence: call `clawback_write_capture` with the chosen slug and the capture text.
    If low confidence: call `clawback_write_inbox` with the capture text.
-4. Call `clawback_vault_sync` with a commit message like "capture: <short summary>".
+4. Sync the vault to persist. Run these git commands in the vault directory, in order:
+   - `git add -A`
+   - `git commit -m "capture: <short summary>"` (skip if nothing staged)
+   - `git pull --rebase --autostash`
+   - `git push`
 5. Reply to the user in Discord with a 1-sentence ack. Include the destination bucket name. Add 👍.
    Keep it terse. Do NOT summarize what was captured — the user already knows.
 

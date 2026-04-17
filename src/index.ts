@@ -1,6 +1,5 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { Type } from "@sinclair/typebox";
-import { execFileSync } from "child_process";
 import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, statSync } from "fs";
 import { join, resolve } from "path";
 import yaml from "js-yaml";
@@ -24,26 +23,6 @@ function assertWithinBase(basePath: string, targetPath: string): void {
 function getVaultPath(config: Record<string, unknown>): string {
   const raw = (config.vaultPath as string) || "~/clawback-vault";
   return raw.replace(/^~/, process.env.HOME || "");
-}
-
-function vaultSync(vaultPath: string, message: string): { ok: boolean; error?: string } {
-  try {
-    // Commit local changes first (capture writes dirty the worktree before sync is called)
-    execFileSync("git", ["add", "-A"], { cwd: vaultPath, stdio: "pipe" });
-    const status = execFileSync("git", ["status", "--porcelain"], {
-      cwd: vaultPath,
-      encoding: "utf-8",
-    });
-    if (status.trim()) {
-      execFileSync("git", ["commit", "-m", message], { cwd: vaultPath, stdio: "pipe" });
-    }
-    // Then pull with autostash to handle any remote changes
-    execFileSync("git", ["pull", "--rebase", "--autostash"], { cwd: vaultPath, stdio: "pipe" });
-    execFileSync("git", ["push"], { cwd: vaultPath, stdio: "pipe" });
-    return { ok: true };
-  } catch (e) {
-    return { ok: false, error: (e as Error).message };
-  }
 }
 
 interface BucketManifestEntry {
@@ -233,32 +212,6 @@ export default definePluginEntry({
         return {
           content: [{ type: "text" as const, text: "Capture written to _inbox.md" }],
           details: { timestamp },
-        };
-      },
-    });
-
-    // --- Tool: Sync vault (git pull/commit/push) ---
-    api.registerTool({
-      name: "clawback_vault_sync",
-      label: "Sync Vault",
-      description:
-        "Sync the Obsidian vault via git — pulls latest, commits pending changes, pushes. " +
-        "Call this AFTER writing captures or updating memory to persist changes. " +
-        "Obsidian picks up changes via its git plugin.",
-      parameters: Type.Object({
-        message: Type.String({ description: "Git commit message" }),
-      }),
-      async execute(_toolCallId, params) {
-        const vaultPath = getVaultPath(api.getConfig());
-        const result = vaultSync(vaultPath, params.message);
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: result.ok ? "Vault synced." : `Sync failed: ${result.error}`,
-            },
-          ],
-          details: result,
         };
       },
     });

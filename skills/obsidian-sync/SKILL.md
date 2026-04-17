@@ -16,15 +16,16 @@ metadata:
 
 # Obsidian Sync
 
-Vault sync is handled by the `clawback_vault_sync` tool registered in `src/index.ts`. Other skills call that tool after writing to the vault — this skill exists as documentation.
+Other skills sync the vault after writing by running git commands directly. This skill documents the canonical sync procedure.
 
-## How sync works
+## Sync procedure
 
-The `clawback_vault_sync` tool:
-1. `git pull --rebase` — picks up Obsidian-side changes
-2. `git add -A` — stages all changes
-3. `git commit -m <message>` — commits with the provided message
-4. `git push` — pushes to GitHub
+Run these git commands in the vault directory, in this order:
+
+1. `git add -A` — stage all changes
+2. `git commit -m <message>` — commit with a descriptive message (skip if nothing staged)
+3. `git pull --rebase --autostash` — rebase on remote, stashing any uncommitted changes
+4. `git push` — push to GitHub
 
 ## Poll (every 5 minutes)
 
@@ -35,7 +36,7 @@ openclaw cron add --name "vault-pull" --cron "*/5 * * * *" --message "Pull lates
 
 ## Conflict handling
 
-If rebase fails, `clawback_vault_sync` returns `{ ok: false, error: "..." }`. The calling skill should:
+If the rebase or push fails, the calling skill should:
 1. Notify via Discord: "Sync conflict — resolve manually"
 2. Do NOT retry automatically
 3. Do NOT force-push

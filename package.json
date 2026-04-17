@@ -13,12 +13,13 @@
   "openclaw": {
     "extensions": ["./dist/index.js"]
   },
+  "dependencies": {
+    "@sinclair/typebox": "^0.34.0",
+    "js-yaml": "^4.1.0"
+  },
   "devDependencies": {
     "typescript": "^5.7.0",
     "@types/node": "^22.0.0",
-    "@sinclair/typebox": "^0.34.0",
-    "@openclaw/plugin-sdk": "^1.0.0",
-    "js-yaml": "^4.1.0",
     "@types/js-yaml": "^4.0.0"
   },
   "repository": {

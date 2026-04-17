@@ -1,147 +1,12 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { Type } from "@sinclair/typebox";
-import { readFileSync, writeFileSync, appendFileSync, readdirSync, existsSync, mkdirSync, statSync } from "fs";
-import { join, resolve, relative, sep } from "path";
-import { homedir } from "os";
-import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
-
-const SLUG_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
-
-function validateSlug(slug: string): void {
-  if (!SLUG_PATTERN.test(slug) || slug.length > 64) {
-    throw new Error(`Invalid slug: "${slug}". Must match /^[a-z0-9][a-z0-9-]*$/ and be ≤64 chars.`);
-  }
-}
-
-function assertWithinBase(basePath: string, targetPath: string): void {
-  const resolved = resolve(targetPath);
-  const base = resolve(basePath);
-  if (resolved === base) return;
-  const rel = relative(base, resolved);
-  if (rel.startsWith("..") || rel.startsWith(sep) || /^[a-zA-Z]:/.test(rel)) {
-    throw new Error(`Path traversal blocked: ${resolved} is outside ${base}`);
-  }
-}
-
-function getVaultPath(pluginConfig: Record<string, unknown>): string {
-  const raw = (pluginConfig.vaultPath as string) || "~/clawback-vault";
-  return raw.replace(/^~/, homedir());
-}
-
-interface BucketManifestEntry {
-  slug: string;
-  description: string;
-  aliases: string[];
-  state: string;
-  lastCommit: string;
-  repos: string[];
-  recentCaptures: string[];
-}
-
-function readBucketManifest(vaultPath: string): BucketManifestEntry[] {
-  const bucketsDir = join(vaultPath, "OpenClaw", "buckets");
-  if (!existsSync(bucketsDir)) return [];
-
-  const entries: BucketManifestEntry[] = [];
-  for (const slug of readdirSync(bucketsDir, { withFileTypes: true })) {
-    if (!slug.isDirectory()) continue;
-    const bucketFile = join(bucketsDir, slug.name, "_bucket.md");
-    if (!existsSync(bucketFile)) continue;
-
-    const { data: fm } = matter(readFileSync(bucketFile, "utf-8"));
-    const capturesFile = join(bucketsDir, slug.name, "captures.md");
-    const recentCaptures = existsSync(capturesFile)
-      ? readFileSync(capturesFile, "utf-8")
-          .split("\n---\n")
-          .filter((chunk) => chunk.includes("**"))
-          .slice(-3)
-      : [];
-
-    entries.push({
-      slug: slug.name,
-      description: fm.description,
-      aliases: fm.aliases,
-      state: fm.state,
-      lastCommit: fm["last-commit"],
-      repos: fm.repos,
-      recentCaptures,
-    });
-  }
-  return entries;
-}
-
-interface BucketFrontmatter {
-  [key: string]: unknown;
-  slug: string;
-  description: string;
-  aliases: string[];
-  state: string;
-  "last-commit": string;
-  repos: string[];
-}
-
-const BUCKET_DEFAULTS: BucketFrontmatter = {
-  slug: "",
-  description: "",
-  aliases: [],
-  state: "active",
-  "last-commit": "",
-  repos: [],
-};
-
-interface MatterResult {
-  data: BucketFrontmatter;
-  content: string;
-}
-
-function matter(input: string): MatterResult {
-  const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(input);
-  if (!match) return { data: { ...BUCKET_DEFAULTS }, content: input };
-  const raw = parseYaml(match[1]) ?? {};
-  return {
-    data: { ...BUCKET_DEFAULTS, ...raw },
-    content: input.slice(match[0].length),
-  };
-}
-
-function stringifyMatter(data: Record<string, unknown>, content: string): string {
-  return `---\n${stringifyYaml(data).trim()}\n---${content}`;
-}
-
-function writeCapture(
-  vaultPath: string,
-  slug: string,
-  text: string,
-  timestamp: string,
-): void {
-  validateSlug(slug);
-  const bucketsBase = join(vaultPath, "OpenClaw", "buckets");
-  const bucketDir = join(bucketsBase, slug);
-  assertWithinBase(bucketsBase, bucketDir);
-  if (!existsSync(bucketDir)) {
-    mkdirSync(bucketDir, { recursive: true });
-  }
-  const capturesFile = join(bucketDir, "captures.md");
-  const entry = `\n---\n**${timestamp}**\n${text}\n`;
-  if (existsSync(capturesFile)) {
-    appendFileSync(capturesFile, entry);
-  } else {
-    writeFileSync(capturesFile, `# Captures — ${slug}\n${entry}`);
-  }
-}
-
-function writeInbox(vaultPath: string, text: string, timestamp: string): void {
-  const inboxFile = join(vaultPath, "_inbox.md");
-  const entry = `\n---\n**${timestamp}**\n${text}\n`;
-  if (existsSync(inboxFile)) {
-    appendFileSync(inboxFile, entry);
-  } else {
-    writeFileSync(
-      inboxFile,
-      `# Inbox\n\nLow-confidence captures. Review and route manually or correct with ❌.\n${entry}`,
-    );
-  }
-}
+import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, statSync } from "node:fs";
+import { join } from "node:path";
+import {
+  validateSlug, assertWithinBase, getVaultPath,
+  matter, stringifyMatter,
+  readBucketManifest, writeCapture, writeInbox, autoDiscoverBuckets,
+} from "./vault.js";
 
 export default definePluginEntry({
   id: "clawback",
@@ -557,17 +422,14 @@ export default definePluginEntry({
         }
 
         const lastCapture = captureChunks[captureChunks.length - 1];
-        // Remove last capture from source
         const lastIndex = chunks.lastIndexOf(lastCapture);
         chunks.splice(lastIndex, 1);
         writeFileSync(fromCapturesFile, chunks.join("\n---\n"));
 
-        // Extract timestamp and text from the capture
-        const tsMatch = RegExp(/\*\*(.+?)\*\*/).exec(lastCapture);
+        const tsMatch = /\*\*(.+?)\*\*/.exec(lastCapture);
         const timestamp = tsMatch ? tsMatch[1] : new Date().toISOString();
         const captureText = lastCapture.replace(/\*\*.*?\*\*\n?/, "").trim();
 
-        // Write to destination
         writeCapture(vaultPath, toSlug, captureText, timestamp);
 
         return {
@@ -640,7 +502,6 @@ export default definePluginEntry({
         const vaultPath = getVaultPath(api.pluginConfig);
         const bucketsBase = join(vaultPath, "OpenClaw", "buckets");
 
-        // Read source future-me.md
         const futureFile = join(bucketsBase, sourceSlug, "future-me.md");
         assertWithinBase(bucketsBase, futureFile);
         if (!existsSync(futureFile)) {
@@ -653,18 +514,15 @@ export default definePluginEntry({
           throw new Error(`No entries in ${sourceSlug}/future-me.md to promote.`);
         }
 
-        // Pop the last entry
         const lastEntry = entryChunks[entryChunks.length - 1];
         const lastIndex = chunks.lastIndexOf(lastEntry);
         chunks.splice(lastIndex, 1);
         writeFileSync(futureFile, chunks.join("\n---\n"));
 
-        // Extract text and timestamp
-        const tsMatch = RegExp(/\*\*(.+?)\*\*/).exec(lastEntry);
+        const tsMatch = /\*\*(.+?)\*\*/.exec(lastEntry);
         const timestamp = tsMatch ? tsMatch[1] : new Date().toISOString();
         const captureText = lastEntry.replace(/\*\*.*?\*\*\n?/, "").trim();
 
-        // Scaffold the new bucket
         const newBucketDir = join(bucketsBase, newSlug);
         assertWithinBase(bucketsBase, newBucketDir);
         if (!existsSync(newBucketDir)) {
@@ -678,7 +536,6 @@ export default definePluginEntry({
           writeFileSync(join(newBucketDir, "future-me.md"), `# Future Me — ${newSlug}\n\nTangent captures parked here for later.\n`);
         }
 
-        // Write the capture to the new bucket
         writeCapture(vaultPath, newSlug, captureText, timestamp);
 
         return {
@@ -693,34 +550,10 @@ export default definePluginEntry({
     // --- Boot: auto-discover + log manifest on start ---
     api.registerHook("before_agent_start", async () => {
       const vaultPath = getVaultPath(api.pluginConfig);
-      const bucketsDir = join(vaultPath, "OpenClaw", "buckets");
-
-      // Auto-discover: scaffold _bucket.md for any folder that's missing one
-      if (existsSync(bucketsDir)) {
-        for (const entry of readdirSync(bucketsDir, { withFileTypes: true })) {
-          if (!entry.isDirectory()) continue;
-          if (!SLUG_PATTERN.test(entry.name)) continue;
-          const bucketFile = join(bucketsDir, entry.name, "_bucket.md");
-          if (!existsSync(bucketFile)) {
-            const slug = entry.name;
-            const description = `Auto-discovered from vault folder "${slug}"`;
-            const bucketMd = stringifyMatter(
-              { slug, description, aliases: [], state: "active", "last-commit": "", repos: [] },
-              `\n# ${slug}\n\n${description}\n`,
-            );
-            writeFileSync(bucketFile, bucketMd);
-            // Scaffold companion files if missing
-            const capturesFile = join(bucketsDir, slug, "captures.md");
-            if (!existsSync(capturesFile)) writeFileSync(capturesFile, `# Captures — ${slug}\n`);
-            const memoryFile = join(bucketsDir, slug, "memory.md");
-            if (!existsSync(memoryFile)) writeFileSync(memoryFile, `# Memory — ${slug}\n`);
-            const futureFile = join(bucketsDir, slug, "future-me.md");
-            if (!existsSync(futureFile)) writeFileSync(futureFile, `# Future Me — ${slug}\n\nTangent captures parked here for later.\n`);
-            api.logger.info(`auto-discovered bucket: ${slug}`);
-          }
-        }
+      const discovered = autoDiscoverBuckets(vaultPath);
+      for (const slug of discovered) {
+        api.logger.info(`auto-discovered bucket: ${slug}`);
       }
-
       const manifest = readBucketManifest(vaultPath);
       api.logger.info(`manifest loaded: ${manifest.length} buckets.`);
       for (const b of manifest) {

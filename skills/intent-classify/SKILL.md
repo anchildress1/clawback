@@ -12,18 +12,16 @@ metadata:
 
 # Intent Classify
 
-You classify a single Discord message into exactly one intent. Called by the `capture` skill — never invoked directly.
+Intent classification is inlined in the `capture` skill (Step 1). This skill documents the classification rules.
 
-## Output
+## Three intents
 
-Return exactly one of these three labels:
-
-- **command** — the user is giving an imperative instruction. Examples: "move this to project X", "promote capture 3", "status", anything starting with `/`.
-- **question** — the user is asking something. Examples: "what did I decide about Y?", "show me open threads for Z", "when did I last touch the architect bucket?"
-- **capture** — everything else. This is the default. Notes, ideas, links, shorthand, observations, anything that should be saved.
+- **command** — imperative instruction. Starts with `/` or matches: "move this to...", "promote...", "status". Examples: `/status`, "move last to architect", "promote capture 3".
+- **question** — interrogative. Contains question marks or question words directed at the agent. Examples: "what did I decide about Y?", "show me open threads for Z", "when did I last touch architect?"
+- **capture** — everything else. The default. Notes, ideas, links, shorthand, observations.
 
 ## Rules
 
-- Pattern-match first (cheap, no LLM). Use LLM only for ambiguous cases.
-- When in doubt, classify as **capture**. False-capture is cheaper than a missed note.
-- Do NOT ask the user to clarify. Just classify.
+- Pattern-match first: `/` prefix → command. `?` suffix or starts with "what/when/how/show/tell" → question. Everything else → capture.
+- When in doubt → **capture**. False-capture is cheaper than a missed note.
+- Do NOT ask the user to clarify.

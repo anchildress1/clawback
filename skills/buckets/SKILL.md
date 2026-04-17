@@ -16,14 +16,11 @@ You manage project buckets — the folder-per-project structure in the vault.
 
 ## Auto-discovery (on boot)
 
-Scan `OpenClaw/buckets/*/` for folders missing `_bucket.md`. For each:
-1. Create `_bucket.md` with slug derived from folder name.
-2. Set state to `active`.
-3. Log "discovered bucket: <slug>" to boot output.
+Handled by the `before_agent_start` hook in `src/index.ts`. Reads all bucket folders and logs the manifest.
 
-## Bucket folder structure
+## Creating a new bucket
 
-When creating a new bucket, scaffold exactly this:
+Call `clawback_scaffold_bucket` with a slug and description. It creates:
 
 ```
 OpenClaw/buckets/<slug>/

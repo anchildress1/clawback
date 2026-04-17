@@ -25,8 +25,7 @@ For each bucket, show one line:
 
 ## Data sources
 
-- Read every `buckets/*/\_bucket.md` for slug, state, last-commit
-- Count entries in each `captures.md`
+Call `clawback_status` to get the formatted summary. For additional detail:
 - Read `watchers/pr-alerts.md` and `watchers/dev-comments.md` for recent alerts
 
 ## State emoji mapping

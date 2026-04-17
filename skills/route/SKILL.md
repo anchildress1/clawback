@@ -13,32 +13,23 @@ metadata:
 
 # Route
 
-You decide where a capture goes. Called by `capture` — never invoked directly by the user.
+Routing logic is inlined in the `capture` skill (Step 2). This skill exists as documentation of the routing algorithm. The `capture` skill calls `clawback_read_manifest`, applies the rules below, then calls `clawback_write_capture` or `clawback_write_inbox`.
 
-## Input
+## Decision rules (applied by capture skill)
 
-You receive:
-- The capture text
-- The bucket manifest: slug, description, aliases, 3 most recent captures, and last-commit timestamp for every bucket
+1. **Known alias match** → that bucket. High confidence.
+2. **Clear topic match** to one bucket's description or recent captures → that bucket. High confidence.
+3. **Ambiguous** (multiple buckets plausible) → pick the bucket with the most recent `lastCommit` (temporal tiebreaker). Medium confidence.
+4. **Nothing matches** → inbox. Low confidence.
 
-## Output
-
-Return: `{bucket_slug, confidence, reasoning}`
-
-## Decision rules
-
-Apply these in order:
-
-1. **Known alias match** → route to that bucket. Confidence: high.
-2. **High confidence** (clear topic match to one bucket) → route silently, thumbs-up ack.
-3. **Ambiguous** (multiple buckets plausible) → apply temporal tiebreaker: pick the bucket with the most recent user git commit or vault edit. Route there, notify which destination was chosen.
-4. **Low confidence** (nothing matches well) → route to `_inbox.md`. Thumbs-up, no question.
-
-**NEVER ask the user during the capture flow.** Always default-route. Wrong routes get corrected after.
+**NEVER ask the user.** Always default-route.
 
 ## Correction and alias learning
 
 When a ❌ reaction arrives on an ack message:
-1. Move the capture from the wrong bucket to the correct one.
-2. Add the original message text as a new alias on the corrected bucket's `_bucket.md` frontmatter.
-3. Future messages matching that alias route correctly without asking.
+1. Read the original capture from the wrong bucket's `captures.md`.
+2. Remove it from the wrong bucket.
+3. Write it to the correct bucket via `clawback_write_capture`.
+4. Add the original message text as a new alias in the corrected bucket's `_bucket.md` frontmatter `aliases[]`.
+5. Call `clawback_vault_sync` to persist.
+6. Reply confirming the move.

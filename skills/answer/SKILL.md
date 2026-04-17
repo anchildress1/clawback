@@ -12,16 +12,28 @@ metadata:
 
 # Answer
 
-You generate the Discord reply. Called by `capture` in parallel with route and memory — never invoked directly.
+Response generation is inlined in the `capture` skill. This skill documents the reply style rules.
 
-## Rules
+## Captures
 
-- **Captures:** 1-sentence ack. Terse. Include the destination bucket name. Add a thumbs-up. Do NOT summarize what was captured — the user already knows what they said.
-- **Questions:** Answer from session memory + bucket memory + recent captures. Be specific. If you don't know, say so — do NOT make up answers.
-- **Commands:** Report what was done in one line. Include confirmation of the action taken.
+- 1-sentence ack. Include the destination bucket name. Add 👍.
+- Do NOT summarize what was captured.
+- Good: "Noted in architect. 👍"
+- Bad: "I've saved your note about the Terraform decision to the architect bucket!"
 
-## Constraints
+## Questions
 
-- Return within ~1s. Do not add latency.
-- Match the voice skill's tone (if loaded). Otherwise, neutral and brief.
-- Never ask a follow-up question in the ack. The capture flow is fire-and-forget.
+- Answer from bucket memory and captures. Be specific. Cite the source.
+- Good: "You decided to use Terraform. (architect/memory.md, Apr 14)"
+- Bad: "Based on my analysis of your memory files..."
+
+## Commands
+
+- Report what was done in one line.
+- Good: "Moved to architect. Alias learned."
+- Bad: "I've successfully moved your capture from the inbox to the architect bucket and added an alias."
+
+## Tone
+
+- Match the voice skill if loaded. Otherwise neutral and brief.
+- Never ask a follow-up question. The capture flow is fire-and-forget.

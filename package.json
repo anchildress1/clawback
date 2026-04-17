@@ -4,6 +4,8 @@
   "description": "ADHD-friendly OpenClaw plugin that routes Discord captures into an Obsidian vault by project, with memory that learns how you work.",
   "main": "src/index.ts",
   "scripts": {
+    "build": "tsc",
+    "lint": "tsc --noEmit",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {

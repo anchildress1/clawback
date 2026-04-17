@@ -24,6 +24,7 @@ declare module "openclaw/plugin-sdk/plugin-entry" {
   interface PluginApi {
     registerTool(tool: ToolRegistration): void;
     registerHook(event: string, handler: () => Promise<void>): void;
+    registerHook(event: string, options: { name: string }, handler: () => Promise<void>): void;
     getConfig(): Record<string, unknown>;
     logger: PluginLogger;
     rootDir: string;

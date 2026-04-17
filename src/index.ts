@@ -331,7 +331,7 @@ export default definePluginEntry({
     });
 
     // --- Boot: log manifest on start ---
-    api.registerHook("before_agent_start", async () => {
+    api.registerHook("before_agent_start", { name: "clawback_boot" }, async () => {
       const vaultPath = getVaultPath(api.getConfig());
       const manifest = readBucketManifest(vaultPath);
       api.logger.info(`manifest loaded: ${manifest.length} buckets.`);

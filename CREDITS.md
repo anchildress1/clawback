@@ -25,6 +25,13 @@ Open-source skills and tools used by Clawback.
 | [briancolinger/pr-reviewer](https://clawhub.ai/briancolinger/pr-reviewer) | Brian Colinger | MIT | HEAD SHA tracking to avoid re-reviewing PRs |
 | [bastos/obsidian-daily](https://github.com/openclaw/skills/blob/main/skills/bastos/obsidian-daily/SKILL.md) | Bastos | MIT | Date-keyed markdown organization |
 
+## NPM dependencies
+
+| Package | Version | License | Usage |
+|---|---|---|---|
+| [yaml](https://github.com/eemeli/yaml) | ^2.8 | ISC | YAML parsing/serialization for _bucket.md frontmatter |
+| [@sinclair/typebox](https://github.com/sinclairzx81/typebox) | ^0.34 | MIT | JSON Schema types for tool parameter definitions |
+
 ## Platform
 
 | Project | Usage |

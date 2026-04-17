@@ -537,9 +537,96 @@ export default definePluginEntry({
                 };
             },
         });
-        // --- Boot: log manifest on start ---
+        // --- Tool: Promote from future-me ---
+        api.registerTool({
+            name: "clawback_promote_future_me",
+            label: "Promote Future-Me Entry",
+            description: "Promote the most recent entry from a bucket's future-me.md into a new bucket. " +
+                "Scaffolds the new bucket, moves the entry to its captures.md, and removes it from " +
+                "the source future-me.md. Use on 🎯 reaction or /promote command.",
+            parameters: Type.Object({
+                sourceSlug: Type.String({ description: "Bucket slug where the future-me entry lives" }),
+                newSlug: Type.String({ description: "Slug for the new bucket to create" }),
+                description: Type.String({ description: "One-line description for the new bucket" }),
+            }),
+            async execute(_toolCallId, params) {
+                const { sourceSlug, newSlug, description } = params;
+                validateSlug(sourceSlug);
+                validateSlug(newSlug);
+                const vaultPath = getVaultPath(api.pluginConfig);
+                const bucketsBase = join(vaultPath, "OpenClaw", "buckets");
+                // Read source future-me.md
+                const futureFile = join(bucketsBase, sourceSlug, "future-me.md");
+                assertWithinBase(bucketsBase, futureFile);
+                if (!existsSync(futureFile)) {
+                    throw new Error(`No future-me.md in ${sourceSlug}.`);
+                }
+                const content = readFileSync(futureFile, "utf-8");
+                const chunks = content.split("\n---\n");
+                const entryChunks = chunks.filter((chunk) => chunk.includes("**"));
+                if (entryChunks.length === 0) {
+                    throw new Error(`No entries in ${sourceSlug}/future-me.md to promote.`);
+                }
+                // Pop the last entry
+                const lastEntry = entryChunks[entryChunks.length - 1];
+                const lastIndex = chunks.lastIndexOf(lastEntry);
+                chunks.splice(lastIndex, 1);
+                writeFileSync(futureFile, chunks.join("\n---\n"));
+                // Extract text and timestamp
+                const tsMatch = RegExp(/\*\*(.+?)\*\*/).exec(lastEntry);
+                const timestamp = tsMatch ? tsMatch[1] : new Date().toISOString();
+                const captureText = lastEntry.replace(/\*\*.*?\*\*\n?/, "").trim();
+                // Scaffold the new bucket
+                const newBucketDir = join(bucketsBase, newSlug);
+                assertWithinBase(bucketsBase, newBucketDir);
+                if (!existsSync(newBucketDir)) {
+                    mkdirSync(newBucketDir, { recursive: true });
+                    const bucketMd = stringifyMatter({ slug: newSlug, description, aliases: [], state: "active", "last-commit": "", repos: [] }, `\n# ${newSlug}\n\n${description}\n`);
+                    writeFileSync(join(newBucketDir, "_bucket.md"), bucketMd);
+                    writeFileSync(join(newBucketDir, "memory.md"), `# Memory — ${newSlug}\n`);
+                    writeFileSync(join(newBucketDir, "future-me.md"), `# Future Me — ${newSlug}\n\nTangent captures parked here for later.\n`);
+                }
+                // Write the capture to the new bucket
+                writeCapture(vaultPath, newSlug, captureText, timestamp);
+                return {
+                    content: [
+                        { type: "text", text: `Promoted to ${newSlug}. 🎯` },
+                    ],
+                    details: { sourceSlug, newSlug, captureText },
+                };
+            },
+        });
+        // --- Boot: auto-discover + log manifest on start ---
         api.registerHook("before_agent_start", async () => {
             const vaultPath = getVaultPath(api.pluginConfig);
+            const bucketsDir = join(vaultPath, "OpenClaw", "buckets");
+            // Auto-discover: scaffold _bucket.md for any folder that's missing one
+            if (existsSync(bucketsDir)) {
+                for (const entry of readdirSync(bucketsDir, { withFileTypes: true })) {
+                    if (!entry.isDirectory())
+                        continue;
+                    if (!SLUG_PATTERN.test(entry.name))
+                        continue;
+                    const bucketFile = join(bucketsDir, entry.name, "_bucket.md");
+                    if (!existsSync(bucketFile)) {
+                        const slug = entry.name;
+                        const description = `Auto-discovered from vault folder "${slug}"`;
+                        const bucketMd = stringifyMatter({ slug, description, aliases: [], state: "active", "last-commit": "", repos: [] }, `\n# ${slug}\n\n${description}\n`);
+                        writeFileSync(bucketFile, bucketMd);
+                        // Scaffold companion files if missing
+                        const capturesFile = join(bucketsDir, slug, "captures.md");
+                        if (!existsSync(capturesFile))
+                            writeFileSync(capturesFile, `# Captures — ${slug}\n`);
+                        const memoryFile = join(bucketsDir, slug, "memory.md");
+                        if (!existsSync(memoryFile))
+                            writeFileSync(memoryFile, `# Memory — ${slug}\n`);
+                        const futureFile = join(bucketsDir, slug, "future-me.md");
+                        if (!existsSync(futureFile))
+                            writeFileSync(futureFile, `# Future Me — ${slug}\n\nTangent captures parked here for later.\n`);
+                        api.logger.info(`auto-discovered bucket: ${slug}`);
+                    }
+                }
+            }
             const manifest = readBucketManifest(vaultPath);
             api.logger.info(`manifest loaded: ${manifest.length} buckets.`);
             for (const b of manifest) {

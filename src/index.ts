@@ -331,9 +331,9 @@ export default definePluginEntry({
     api.registerHook("before_agent_start", async () => {
       const vaultPath = getVaultPath(api.getConfig());
       const manifest = readBucketManifest(vaultPath);
-      console.log(`[clawback] manifest loaded: ${manifest.length} buckets.`);
+      api.logger.info(`manifest loaded: ${manifest.length} buckets.`);
       for (const b of manifest) {
-        console.log(`  ${b.slug} [${b.state}] — ${b.aliases.length} aliases`);
+        api.logger.debug(`  ${b.slug} [${b.state}] — ${b.aliases.length} aliases`);
       }
     });
   },

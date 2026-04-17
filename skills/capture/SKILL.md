@@ -36,7 +36,7 @@ Do these steps in order:
    - If nothing matches → low confidence. Use inbox.
 3. If high or medium confidence: call `clawback_write_capture` with the chosen slug and the capture text.
    If low confidence: call `clawback_write_inbox` with the capture text.
-4. Sync the vault to persist. Run these git commands in the vault directory, in order:
+4. Sync the vault to persist. Use the `exec` tool to run these git commands in the vault directory, in order:
    - `git add -A`
    - `git commit -m "capture: <short summary>"` (skip if nothing staged)
    - `git pull --rebase --autostash`

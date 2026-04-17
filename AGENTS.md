@@ -101,6 +101,72 @@ Clawback creates on first use: `_inbox.md`, `_personal.md`, `_conflicts.md`, `Op
 
 ---
 
+## Plugin development model
+
+OpenClaw plugins run **in-process, unsandboxed**. The install scanner enforces security at install time, not at runtime. Understand what each layer is for and stay inside its boundaries.
+
+### Two layers
+
+| Layer | Lives in | Does | Cannot do |
+|---|---|---|---|
+| **Plugin code** (`src/index.ts`) | Compiled JS loaded by `openclaw.extensions` | Register tools, hooks, commands. Read/write files via `fs`. Access `api.logger`, `api.getConfig()`. | Use `child_process`, `eval`, or dynamic code generation. Blocked by install scanner. |
+| **Skills** (`skills/*/SKILL.md`) | Markdown injected into the agent's system prompt | Teach the agent *when and how* to use tools. Orchestrate multi-step workflows. Reference the built-in `exec` tool for system commands. | Call each other directly. Skills are prompt text, not code. |
+
+**The connection between them is implicit.** A SKILL.md says "call `clawback_write_capture`" by name; the agent resolves it to the registered tool. There is no programmatic invocation from skill to tool.
+
+### System commands (git, shell)
+
+**Never use `child_process` in plugin code.** The scanner blocks it.
+
+For git operations and other system commands, skill instructions tell the agent to use OpenClaw's **built-in `exec` tool**. Example from `capture/SKILL.md`:
+
+```
+Run in the vault directory using the exec tool:
+  git add -A
+  git commit -m "capture: <summary>"
+  git pull --rebase --autostash
+  git push
+```
+
+The agent executes these through OpenClaw's sandboxed `exec`, not through plugin code.
+
+### Three config files
+
+| File | Purpose | Validated |
+|---|---|---|
+| `openclaw.plugin.json` | Static manifest: `id`, `configSchema`, `skills` paths. Validated *without executing code*. | At install |
+| `package.json` → `openclaw.extensions` | Runtime: tells the loader which entry point(s) to load. Must resolve inside the package directory. | At load |
+| `skills/*/SKILL.md` | Prompt injection: YAML frontmatter for selection, markdown body for behavior. | At skill load |
+
+### Plugin API surface
+
+Available on the `api` parameter in `register(api)`:
+
+- `api.registerTool()` — register a callable tool (name, label, description, parameters, execute)
+- `api.registerHook()` — register lifecycle hooks (e.g., `before_agent_start`)
+- `api.registerCommand()` — register slash commands
+- `api.getConfig()` — read plugin config from `openclaw.plugin.json` configSchema
+- `api.logger` — scoped logger (debug/info/warn/error). **Use this, not `console.log`.**
+- `api.rootDir` — plugin root directory
+- `api.resolvePath()` — resolve paths relative to plugin root
+
+### Type declarations
+
+`openclaw/plugin-sdk/plugin-entry` is provided by the OpenClaw runtime — it's not an npm package. For TypeScript, maintain a local `src/openclaw.d.ts` with the types used. Import from subpaths only (e.g., `openclaw/plugin-sdk/plugin-entry`, not `openclaw/plugin-sdk`).
+
+### Skill precedence (highest wins)
+
+1. `<workspace>/skills`
+2. `<workspace>/.agents/skills`
+3. `~/.agents/skills`
+4. `~/.openclaw/skills`
+5. Bundled skills
+6. `skills.load.extraDirs` (plugin-shipped — this is us)
+
+Private workspace skills (`ashley-voice`, `ashley-personal-memory`) override public templates because they sit at level 4.
+
+---
+
 ## Skills to scaffold
 
 Five skills for v1. All in `skills/`. Each is a folder with a `SKILL.md`.
@@ -122,7 +188,7 @@ Five skills for v1. All in `skills/`. Each is a folder with a `SKILL.md`.
 | Skill | Role |
 |---|---|
 | `buckets` | Bucket CRUD, auto-discovery from vault folders, lifecycle FSM (`active` → `submitted` → `monitoring` → `archived`), future-me sidecar, 🎯-promotion. |
-| `obsidian-sync` | Git-based vault sync: pull-merge-commit on every agent write, pull every 5 min. Conflict stubs only in v1. |
+| `obsidian-sync` | Documents the canonical git sync procedure (via `exec` tool). Other skills reference this. Poll every 5 min via cron. Conflict stubs only in v1. |
 
 ### Watchers + outputs (Day 4)
 
@@ -212,6 +278,9 @@ Valid YAML frontmatter. Multi-line is allowed when needed (e.g., `description: >
 
 ## What NOT to do
 
+- Don't use `child_process` in plugin code. Use skill instructions + OpenClaw `exec` tool.
+- Don't install phantom npm packages. `openclaw/plugin-sdk/*` is a runtime module, not an npm dep.
+- Don't use `console.log`. Use `api.logger`.
 - Don't rebuild OpenClaw's session memory. Use it.
 - Don't pre-scaffold vault buckets. Agent builds them from first captures.
 - Don't add features that only display/report without learning.

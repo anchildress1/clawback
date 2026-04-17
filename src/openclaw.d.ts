@@ -14,10 +14,20 @@ declare module "openclaw/plugin-sdk/plugin-entry" {
     execute(toolCallId: string, params: Record<string, unknown>): Promise<ToolResult>;
   }
 
+  interface PluginLogger {
+    debug(message: string): void;
+    info(message: string): void;
+    warn(message: string): void;
+    error(message: string): void;
+  }
+
   interface PluginApi {
     registerTool(tool: ToolRegistration): void;
     registerHook(event: string, handler: () => Promise<void>): void;
     getConfig(): Record<string, unknown>;
+    logger: PluginLogger;
+    rootDir: string;
+    resolvePath(relativePath: string): string;
   }
 
   interface PluginEntry {

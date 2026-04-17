@@ -16,11 +16,11 @@ metadata:
 
 # Obsidian Sync
 
-Other skills sync the vault after writing by running git commands directly. This skill documents the canonical sync procedure.
+Other skills sync the vault after writing by running git commands via OpenClaw's built-in `exec` tool. This skill documents the canonical sync procedure.
 
 ## Sync procedure
 
-Run these git commands in the vault directory, in this order:
+Use the `exec` tool to run these git commands in the vault directory, in this order:
 
 1. `git add -A` — stage all changes
 2. `git commit -m <message>` — commit with a descriptive message (skip if nothing staged)

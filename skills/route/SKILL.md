@@ -31,5 +31,5 @@ When a ❌ reaction arrives on an ack message:
 2. Remove it from the wrong bucket.
 3. Write it to the correct bucket via `clawback_write_capture`.
 4. Add the original message text as a new alias in the corrected bucket's `_bucket.md` frontmatter `aliases[]`.
-5. Sync the vault: `git add -A && git commit -m "route: correct <slug>" && git pull --rebase --autostash && git push` in the vault directory.
+5. Sync the vault using the `exec` tool: `git add -A && git commit -m "route: correct <slug>" && git pull --rebase --autostash && git push` in the vault directory.
 6. Reply confirming the move.

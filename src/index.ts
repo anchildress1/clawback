@@ -3,7 +3,7 @@ import { Type } from "@sinclair/typebox";
 import { readFileSync, writeFileSync, appendFileSync, readdirSync, existsSync, mkdirSync, statSync } from "fs";
 import { join, resolve, relative, sep } from "path";
 import { homedir } from "os";
-import yaml from "js-yaml";
+import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 
 const SLUG_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 
@@ -48,23 +48,22 @@ function readBucketManifest(vaultPath: string): BucketManifestEntry[] {
     const bucketFile = join(bucketsDir, slug.name, "_bucket.md");
     if (!existsSync(bucketFile)) continue;
 
-    const content = readFileSync(bucketFile, "utf-8");
-    const frontmatter = parseFrontmatter(content);
+    const { data: fm } = matter(readFileSync(bucketFile, "utf-8"));
     const capturesFile = join(bucketsDir, slug.name, "captures.md");
     const recentCaptures = existsSync(capturesFile)
       ? readFileSync(capturesFile, "utf-8")
           .split("\n---\n")
-          .filter((chunk) => chunk.includes("**"))  // captures have **timestamp** — skip heading preamble
+          .filter((chunk) => chunk.includes("**"))
           .slice(-3)
       : [];
 
     entries.push({
       slug: slug.name,
-      description: frontmatter.description,
-      aliases: frontmatter.aliases,
-      state: frontmatter.state,
-      lastCommit: frontmatter["last-commit"],
-      repos: frontmatter.repos,
+      description: fm.description,
+      aliases: fm.aliases,
+      state: fm.state,
+      lastCommit: fm["last-commit"],
+      repos: fm.repos,
       recentCaptures,
     });
   }
@@ -72,6 +71,8 @@ function readBucketManifest(vaultPath: string): BucketManifestEntry[] {
 }
 
 interface BucketFrontmatter {
+  [key: string]: unknown;
+  slug: string;
   description: string;
   aliases: string[];
   state: string;
@@ -79,36 +80,32 @@ interface BucketFrontmatter {
   repos: string[];
 }
 
-function toStringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value.filter((v): v is string => typeof v === "string");
+const BUCKET_DEFAULTS: BucketFrontmatter = {
+  slug: "",
+  description: "",
+  aliases: [],
+  state: "active",
+  "last-commit": "",
+  repos: [],
+};
+
+interface MatterResult {
+  data: BucketFrontmatter;
+  content: string;
 }
 
-function parseFrontmatter(content: string): BucketFrontmatter {
-  const defaults: BucketFrontmatter = {
-    description: "",
-    aliases: [],
-    state: "active",
-    "last-commit": "",
-    repos: [],
-  };
-  const match = RegExp(/^---\r?\n([\s\S]*?)\r?\n---/).exec(content);
-  if (!match) return defaults;
-
-  let raw: Record<string, unknown>;
-  try {
-    raw = (yaml.load(match[1]) as Record<string, unknown>) ?? {};
-  } catch {
-    return defaults;
-  }
-
+function matter(input: string): MatterResult {
+  const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(input);
+  if (!match) return { data: { ...BUCKET_DEFAULTS }, content: input };
+  const raw = parseYaml(match[1]) ?? {};
   return {
-    description: typeof raw["description"] === "string" ? raw["description"] : defaults.description,
-    aliases: toStringArray(raw["aliases"]),
-    state: typeof raw["state"] === "string" ? raw["state"] : defaults.state,
-    "last-commit": typeof raw["last-commit"] === "string" ? raw["last-commit"] : defaults["last-commit"],
-    repos: toStringArray(raw["repos"]),
+    data: { ...BUCKET_DEFAULTS, ...raw },
+    content: input.slice(match[0].length),
   };
+}
+
+function stringifyMatter(data: Record<string, unknown>, content: string): string {
+  return `---\n${stringifyYaml(data).trim()}\n---${content}`;
 }
 
 function writeCapture(
@@ -248,22 +245,11 @@ export default definePluginEntry({
           };
         }
         mkdirSync(bucketDir, { recursive: true });
-        const frontmatter = [
-          "---",
-          `slug: ${slug}`,
-          `description: ${description}`,
-          "aliases: []",
-          "state: active",
-          "last-commit: ",
-          "repos: []",
-          "---",
-          "",
-          `# ${slug}`,
-          "",
-          description,
-          "",
-        ].join("\n");
-        writeFileSync(join(bucketDir, "_bucket.md"), frontmatter);
+        const bucketMd = stringifyMatter(
+          { slug, description, aliases: [], state: "active", "last-commit": "", repos: [] },
+          `\n# ${slug}\n\n${description}\n`,
+        );
+        writeFileSync(join(bucketDir, "_bucket.md"), bucketMd);
         writeFileSync(join(bucketDir, "captures.md"), `# Captures — ${slug}\n`);
         writeFileSync(join(bucketDir, "memory.md"), `# Memory — ${slug}\n`);
         writeFileSync(
@@ -327,6 +313,307 @@ export default definePluginEntry({
         return {
           content: [{ type: "text" as const, text: lines.join("\n") }],
           details: { bucketCount: manifest.length },
+        };
+      },
+    });
+
+    // --- Tool: Write memory (always-edit, not append) ---
+    api.registerTool({
+      name: "clawback_write_memory",
+      label: "Write Bucket Memory",
+      description:
+        "Replace a bucket's memory.md with updated content. This is an ALWAYS-EDIT operation — " +
+        "pass the full new content, not a diff. The old file is completely replaced. " +
+        "Use after extracting project state from a new capture.",
+      parameters: Type.Object({
+        slug: Type.String({ description: "Bucket slug" }),
+        content: Type.String({ description: "Full new memory.md content (replaces everything)" }),
+      }),
+      async execute(_toolCallId, params) {
+        const { slug, content } = params as { slug: string; content: string };
+        validateSlug(slug);
+        const vaultPath = getVaultPath(api.pluginConfig);
+        const bucketsBase = join(vaultPath, "OpenClaw", "buckets");
+        const bucketDir = join(bucketsBase, slug);
+        assertWithinBase(bucketsBase, bucketDir);
+        if (!existsSync(bucketDir)) {
+          mkdirSync(bucketDir, { recursive: true });
+        }
+        const memoryFile = join(bucketDir, "memory.md");
+        writeFileSync(memoryFile, content);
+        return {
+          content: [{ type: "text" as const, text: `Memory updated for ${slug}.` }],
+          details: { slug },
+        };
+      },
+    });
+
+    // --- Tool: Write personal memory (always-edit, not append) ---
+    api.registerTool({
+      name: "clawback_write_personal_memory",
+      label: "Write Personal Memory",
+      description:
+        "Replace _personal.md at the vault root with updated content. This is an ALWAYS-EDIT " +
+        "operation — pass the full new content. Use when a capture reveals cross-project personal " +
+        "patterns (preferred tools, decision style, recurring frustrations).",
+      parameters: Type.Object({
+        content: Type.String({ description: "Full new _personal.md content (replaces everything)" }),
+      }),
+      async execute(_toolCallId, params) {
+        const { content } = params as { content: string };
+        const vaultPath = getVaultPath(api.pluginConfig);
+        const personalFile = join(vaultPath, "_personal.md");
+        writeFileSync(personalFile, content);
+        return {
+          content: [{ type: "text" as const, text: "Personal memory updated." }],
+          details: {},
+        };
+      },
+    });
+
+    // --- Tool: Read a bucket file ---
+    api.registerTool({
+      name: "clawback_read_bucket_file",
+      label: "Read Bucket File",
+      description:
+        "Read any file from a bucket folder — memory.md, captures.md, future-me.md, or _bucket.md. " +
+        "Use when answering questions or before writing memory updates (to see current state).",
+      parameters: Type.Object({
+        slug: Type.String({ description: "Bucket slug" }),
+        filename: Type.String({
+          description: "File to read: memory.md, captures.md, future-me.md, or _bucket.md",
+        }),
+      }),
+      async execute(_toolCallId, params) {
+        const { slug, filename } = params as { slug: string; filename: string };
+        validateSlug(slug);
+        const allowed = ["memory.md", "captures.md", "future-me.md", "_bucket.md"];
+        if (!allowed.includes(filename)) {
+          throw new Error(`Cannot read "${filename}". Allowed: ${allowed.join(", ")}`);
+        }
+        const vaultPath = getVaultPath(api.pluginConfig);
+        const bucketsBase = join(vaultPath, "OpenClaw", "buckets");
+        const filePath = join(bucketsBase, slug, filename);
+        assertWithinBase(bucketsBase, filePath);
+        if (!existsSync(filePath)) {
+          return {
+            content: [{ type: "text" as const, text: `File not found: ${slug}/${filename}` }],
+            details: { found: false },
+          };
+        }
+        const text = readFileSync(filePath, "utf-8");
+        return {
+          content: [{ type: "text" as const, text }],
+          details: { found: true, slug, filename },
+        };
+      },
+    });
+
+    // --- Tool: Read personal memory ---
+    api.registerTool({
+      name: "clawback_read_personal_memory",
+      label: "Read Personal Memory",
+      description:
+        "Read _personal.md from the vault root. Contains cross-project personal patterns. " +
+        "Read this before writing updates to avoid losing existing content.",
+      parameters: Type.Object({}),
+      async execute() {
+        const vaultPath = getVaultPath(api.pluginConfig);
+        const personalFile = join(vaultPath, "_personal.md");
+        if (!existsSync(personalFile)) {
+          return {
+            content: [{ type: "text" as const, text: "No _personal.md yet." }],
+            details: { found: false },
+          };
+        }
+        const text = readFileSync(personalFile, "utf-8");
+        return {
+          content: [{ type: "text" as const, text }],
+          details: { found: true },
+        };
+      },
+    });
+
+    // --- Tool: Add alias to a bucket ---
+    api.registerTool({
+      name: "clawback_add_alias",
+      label: "Add Bucket Alias",
+      description:
+        "Add a routing alias to a bucket's _bucket.md frontmatter. Use after a ❌ correction " +
+        "so the router learns from mistakes. The alias is the original message text that was misrouted.",
+      parameters: Type.Object({
+        slug: Type.String({ description: "Bucket slug to add the alias to" }),
+        alias: Type.String({ description: "Alias text to add" }),
+      }),
+      async execute(_toolCallId, params) {
+        const { slug, alias } = params as { slug: string; alias: string };
+        validateSlug(slug);
+        const vaultPath = getVaultPath(api.pluginConfig);
+        const bucketsBase = join(vaultPath, "OpenClaw", "buckets");
+        const bucketFile = join(bucketsBase, slug, "_bucket.md");
+        assertWithinBase(bucketsBase, bucketFile);
+        if (!existsSync(bucketFile)) {
+          throw new Error(`Bucket ${slug} does not exist.`);
+        }
+        const { data: fm, content: body } = matter(readFileSync(bucketFile, "utf-8"));
+        const normalized = alias.toLowerCase().trim();
+        if (fm.aliases.includes(normalized)) {
+          return {
+            content: [{ type: "text" as const, text: `Alias already exists on ${slug}.` }],
+            details: { added: false },
+          };
+        }
+        fm.aliases.push(normalized);
+        writeFileSync(bucketFile, stringifyMatter(fm, body));
+        return {
+          content: [{ type: "text" as const, text: `Alias added to ${slug}.` }],
+          details: { added: true, alias: normalized },
+        };
+      },
+    });
+
+    // --- Tool: Update bucket state ---
+    api.registerTool({
+      name: "clawback_update_bucket_state",
+      label: "Update Bucket State",
+      description:
+        "Transition a bucket's lifecycle state in _bucket.md frontmatter. " +
+        "Valid transitions: active→submitted, submitted→monitoring, monitoring→archived.",
+      parameters: Type.Object({
+        slug: Type.String({ description: "Bucket slug" }),
+        newState: Type.String({
+          description: "Target state: submitted, monitoring, or archived",
+        }),
+      }),
+      async execute(_toolCallId, params) {
+        const { slug, newState } = params as { slug: string; newState: string };
+        validateSlug(slug);
+        const validStates = ["active", "submitted", "monitoring", "archived"];
+        if (!validStates.includes(newState)) {
+          throw new Error(`Invalid state "${newState}". Valid: ${validStates.join(", ")}`);
+        }
+        const transitions: Record<string, string[]> = {
+          active: ["submitted"],
+          submitted: ["monitoring"],
+          monitoring: ["archived"],
+          archived: [],
+        };
+        const vaultPath = getVaultPath(api.pluginConfig);
+        const bucketsBase = join(vaultPath, "OpenClaw", "buckets");
+        const bucketFile = join(bucketsBase, slug, "_bucket.md");
+        assertWithinBase(bucketsBase, bucketFile);
+        if (!existsSync(bucketFile)) {
+          throw new Error(`Bucket ${slug} does not exist.`);
+        }
+        const { data: fm, content: body } = matter(readFileSync(bucketFile, "utf-8"));
+        const allowed = transitions[fm.state] ?? [];
+        if (!allowed.includes(newState)) {
+          throw new Error(
+            `Cannot transition ${slug} from "${fm.state}" to "${newState}". ` +
+            `Allowed: ${allowed.length > 0 ? allowed.join(", ") : "none (terminal state)"}.`,
+          );
+        }
+        fm.state = newState;
+        writeFileSync(bucketFile, stringifyMatter(fm, body));
+        return {
+          content: [
+            { type: "text" as const, text: `${slug} → ${newState}.` },
+          ],
+          details: { slug, previousState: fm.state, newState },
+        };
+      },
+    });
+
+    // --- Tool: Move last capture between buckets ---
+    api.registerTool({
+      name: "clawback_move_last_capture",
+      label: "Move Last Capture",
+      description:
+        "Move the most recent capture from one bucket to another. Use for ❌-correction or " +
+        "'/move last to <slug>' command. Also adds an alias on the destination bucket so the " +
+        "router learns from the correction.",
+      parameters: Type.Object({
+        fromSlug: Type.String({ description: "Source bucket slug" }),
+        toSlug: Type.String({ description: "Destination bucket slug" }),
+      }),
+      async execute(_toolCallId, params) {
+        const { fromSlug, toSlug } = params as { fromSlug: string; toSlug: string };
+        validateSlug(fromSlug);
+        validateSlug(toSlug);
+        const vaultPath = getVaultPath(api.pluginConfig);
+        const bucketsBase = join(vaultPath, "OpenClaw", "buckets");
+        const fromCapturesFile = join(bucketsBase, fromSlug, "captures.md");
+        assertWithinBase(bucketsBase, fromCapturesFile);
+
+        if (!existsSync(fromCapturesFile)) {
+          throw new Error(`No captures found in ${fromSlug}.`);
+        }
+
+        const content = readFileSync(fromCapturesFile, "utf-8");
+        const chunks = content.split("\n---\n");
+        const captureChunks = chunks.filter((chunk) => chunk.includes("**"));
+        if (captureChunks.length === 0) {
+          throw new Error(`No captures to move in ${fromSlug}.`);
+        }
+
+        const lastCapture = captureChunks[captureChunks.length - 1];
+        // Remove last capture from source
+        const lastIndex = chunks.lastIndexOf(lastCapture);
+        chunks.splice(lastIndex, 1);
+        writeFileSync(fromCapturesFile, chunks.join("\n---\n"));
+
+        // Extract timestamp and text from the capture
+        const tsMatch = RegExp(/\*\*(.+?)\*\*/).exec(lastCapture);
+        const timestamp = tsMatch ? tsMatch[1] : new Date().toISOString();
+        const captureText = lastCapture.replace(/\*\*.*?\*\*\n?/, "").trim();
+
+        // Write to destination
+        writeCapture(vaultPath, toSlug, captureText, timestamp);
+
+        return {
+          content: [
+            { type: "text" as const, text: `Moved to ${toSlug}. Alias learned.` },
+          ],
+          details: { fromSlug, toSlug, captureText },
+        };
+      },
+    });
+
+    // --- Tool: Write to future-me sidecar ---
+    api.registerTool({
+      name: "clawback_write_future_me",
+      label: "Write Future-Me",
+      description:
+        "Write a capture to a bucket's future-me.md when the capture mentions a non-foreground " +
+        "bucket. Keeps the user in their current flow without switching context.",
+      parameters: Type.Object({
+        slug: Type.String({ description: "Bucket slug for the tangent topic" }),
+        text: Type.String({ description: "The capture text" }),
+      }),
+      async execute(_toolCallId, params) {
+        const { slug, text } = params as { slug: string; text: string };
+        validateSlug(slug);
+        const vaultPath = getVaultPath(api.pluginConfig);
+        const bucketsBase = join(vaultPath, "OpenClaw", "buckets");
+        const bucketDir = join(bucketsBase, slug);
+        assertWithinBase(bucketsBase, bucketDir);
+        if (!existsSync(bucketDir)) {
+          mkdirSync(bucketDir, { recursive: true });
+        }
+        const futureFile = join(bucketDir, "future-me.md");
+        const timestamp = new Date().toISOString();
+        const entry = `\n---\n**${timestamp}**\n${text}\n`;
+        if (existsSync(futureFile)) {
+          appendFileSync(futureFile, entry);
+        } else {
+          writeFileSync(
+            futureFile,
+            `# Future Me — ${slug}\n\nTangent captures parked here for later.\n${entry}`,
+          );
+        }
+        return {
+          content: [{ type: "text" as const, text: `Parked in ${slug}/future-me.md.` }],
+          details: { slug, timestamp },
         };
       },
     });

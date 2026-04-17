@@ -21,9 +21,16 @@ declare module "openclaw/plugin-sdk/plugin-entry" {
     error(message: string): void;
   }
 
+  interface CommandRegistration {
+    name: string;
+    description: string;
+    execute(args: string): Promise<ToolResult>;
+  }
+
   interface PluginApi {
     registerTool(tool: ToolRegistration): void;
     registerHook(event: string, handler: () => Promise<void>, opts?: { name: string }): void;
+    registerCommand(command: CommandRegistration): void;
     pluginConfig: Record<string, unknown>;
     logger: PluginLogger;
     rootDir: string;

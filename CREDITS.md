@@ -1,0 +1,32 @@
+# Credits
+
+Open-source skills and tools used by Clawback.
+
+## Community skills — used as-is
+
+| Skill | Author | License | Usage |
+|---|---|---|---|
+| [steipete/discord](https://clawhub.ai/steipete/discord) | Peter Steinberger | — | All Discord messaging — send, react, threads, pins |
+| [steipete/github](https://clawhub.ai/steipete/github) | Peter Steinberger | — | GitHub PR/issue queries via `gh` CLI |
+
+## Community skills — forked patterns
+
+| Skill | Author | License | What we took |
+|---|---|---|---|
+| [srikanth235/clawflow](https://clawhub.ai/srikanth235/clawflow) | Srikanth Agaram | — | Fan-out/fan-in message-passing pattern for `capture` orchestrator |
+| [steipete/blogwatcher](https://clawhub.ai/steipete/blogwatcher) | Peter Steinberger | — | RSS feed polling pattern for `dev-watcher` challenge index job |
+
+## Community skills — referenced for patterns
+
+| Skill | Author | Pattern referenced |
+|---|---|---|
+| [AndyBold/obsidian-sync](https://clawhub.ai/AndyBold/obsidian-sync) | Andy Bold | Conflict detection for vault sync |
+| [marmikcfc/memory-manager](https://clawhub.ai/marmikcfc/memory-manager) | Marmik | Three-tier memory architecture with compression thresholds |
+| [briancolinger/pr-reviewer](https://clawhub.ai/briancolinger/pr-reviewer) | Brian Colinger | HEAD SHA tracking to avoid re-reviewing PRs |
+| [bastos/obsidian-daily](https://github.com/openclaw/skills/blob/main/skills/bastos/obsidian-daily/SKILL.md) | Bastos | Date-keyed markdown organization |
+
+## Platform
+
+| Project | Usage |
+|---|---|
+| [OpenClaw](https://github.com/openclaw/openclaw) | Gateway, plugin system, session memory, channel handling |

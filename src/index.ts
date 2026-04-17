@@ -3,6 +3,7 @@ import { Type } from "@sinclair/typebox";
 import { execFileSync } from "child_process";
 import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, statSync } from "fs";
 import { join, resolve } from "path";
+import yaml from "js-yaml";
 
 const SLUG_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 
@@ -27,7 +28,7 @@ function getVaultPath(config: Record<string, unknown>): string {
 
 function vaultSync(vaultPath: string, message: string): { ok: boolean; error?: string } {
   try {
-    execFileSync("git", ["pull", "--rebase"], { cwd: vaultPath, stdio: "pipe" });
+    // Commit local changes first (capture writes dirty the worktree before sync is called)
     execFileSync("git", ["add", "-A"], { cwd: vaultPath, stdio: "pipe" });
     const status = execFileSync("git", ["status", "--porcelain"], {
       cwd: vaultPath,
@@ -35,8 +36,10 @@ function vaultSync(vaultPath: string, message: string): { ok: boolean; error?: s
     });
     if (status.trim()) {
       execFileSync("git", ["commit", "-m", message], { cwd: vaultPath, stdio: "pipe" });
-      execFileSync("git", ["push"], { cwd: vaultPath, stdio: "pipe" });
     }
+    // Then pull with autostash to handle any remote changes
+    execFileSync("git", ["pull", "--rebase", "--autostash"], { cwd: vaultPath, stdio: "pipe" });
+    execFileSync("git", ["push"], { cwd: vaultPath, stdio: "pipe" });
     return { ok: true };
   } catch (e) {
     return { ok: false, error: (e as Error).message };
@@ -67,7 +70,10 @@ function readBucketManifest(vaultPath: string): BucketManifestEntry[] {
     const frontmatter = parseFrontmatter(content);
     const capturesFile = join(bucketsDir, slug.name, "captures.md");
     const recentCaptures = existsSync(capturesFile)
-      ? readFileSync(capturesFile, "utf-8").split("\n---\n").slice(-3)
+      ? readFileSync(capturesFile, "utf-8")
+          .split("\n---\n")
+          .filter((chunk) => chunk.includes("**"))  // captures have **timestamp** — skip heading preamble
+          .slice(-3)
       : [];
 
     entries.push({
@@ -91,6 +97,11 @@ interface BucketFrontmatter {
   repos: string[];
 }
 
+function toStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((v): v is string => typeof v === "string");
+}
+
 function parseFrontmatter(content: string): BucketFrontmatter {
   const defaults: BucketFrontmatter = {
     description: "",
@@ -99,32 +110,22 @@ function parseFrontmatter(content: string): BucketFrontmatter {
     "last-commit": "",
     repos: [],
   };
-  const match = content.match(/^---\n([\s\S]*?)\n---/);
+  const match = RegExp(/^---\n([\s\S]*?)\n---/).exec(content);
   if (!match) return defaults;
 
-  const raw: Record<string, string> = {};
-  for (const line of match[1].split("\n")) {
-    const colonIdx = line.indexOf(":");
-    if (colonIdx < 0) continue;
-    raw[line.slice(0, colonIdx).trim()] = line.slice(colonIdx + 1).trim();
-  }
-
-  function parseStringArray(value: string | undefined): string[] {
-    if (!value) return [];
-    try {
-      const parsed: unknown = JSON.parse(value);
-      return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === "string") : [];
-    } catch {
-      return [];
-    }
+  let raw: Record<string, unknown>;
+  try {
+    raw = (yaml.load(match[1]) as Record<string, unknown>) ?? {};
+  } catch {
+    return defaults;
   }
 
   return {
-    description: raw["description"] ?? defaults.description,
-    aliases: parseStringArray(raw["aliases"]),
-    state: raw["state"] ?? defaults.state,
-    "last-commit": raw["last-commit"] ?? defaults["last-commit"],
-    repos: parseStringArray(raw["repos"]),
+    description: typeof raw["description"] === "string" ? raw["description"] : defaults.description,
+    aliases: toStringArray(raw["aliases"]),
+    state: typeof raw["state"] === "string" ? raw["state"] : defaults.state,
+    "last-commit": typeof raw["last-commit"] === "string" ? raw["last-commit"] : defaults["last-commit"],
+    repos: toStringArray(raw["repos"]),
   };
 }
 
@@ -354,7 +355,7 @@ export default definePluginEntry({
           const emoji = stateEmoji[b.state] || "❓";
           const capturesFile = join(getVaultPath(api.getConfig()), "OpenClaw", "buckets", b.slug, "captures.md");
           const totalCaptures = existsSync(capturesFile)
-            ? readFileSync(capturesFile, "utf-8").split("\n---\n").filter(Boolean).length
+            ? readFileSync(capturesFile, "utf-8").split("\n---\n").filter((chunk) => chunk.includes("**")).length
             : 0;
           const lastCaptureStat = existsSync(capturesFile) ? statSync(capturesFile).mtimeMs : 0;
           const daysIdle = lastCaptureStat > 0 ? Math.floor((now - lastCaptureStat) / 86_400_000) : -1;

@@ -71,7 +71,7 @@ Do NOT collapse these. They are different:
 | Layer | Lives in | Scope | Who writes |
 |---|---|---|---|
 | OpenClaw session memory | OpenClaw internals | per-session, ephemeral | OpenClaw (don't touch) |
-| Bucket memory (`buckets/<project>/memory.md`) | `clawback-vault` | per-project, persistent | Clawback `memory` skill |
+| Bucket memory (`OpenClaw/buckets/<project>/memory.md`) | `clawback-vault` | per-project, persistent | Clawback `memory` skill |
 | Personal memory (`_personal.md`) | `clawback-vault` | cross-project, persistent | Clawback `memory` skill |
 
 **Clawback's memory skill never competes with OpenClaw's session memory.** It does something OpenClaw doesn't: writes structured project state to user-visible, git-synced markdown that future-you reads in Obsidian on your phone.
@@ -97,7 +97,7 @@ clawback-vault/
 └── (everything else emerges as Clawback runs)
 ```
 
-Clawback creates on first use: `_inbox.md`, `_personal.md`, `_conflicts.md`, `buckets/<project>/{memory.md, captures.md, future-me.md, drafts/}`, `watchers/{pr-alerts.md, dev-comments.md}` — only the ones it needs, only when it needs them.
+Clawback creates on first use: `_inbox.md`, `_personal.md`, `_conflicts.md`, `OpenClaw/buckets/<project>/{memory.md, captures.md, future-me.md, drafts/}`, `watchers/{pr-alerts.md, dev-comments.md}` — only the ones it needs, only when it needs them.
 
 ---
 

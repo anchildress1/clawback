@@ -7,7 +7,6 @@
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "required": ["discordToken", "githubPat"],
     "properties": {
       "discordToken": {
         "type": "string",

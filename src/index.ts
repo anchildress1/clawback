@@ -183,14 +183,15 @@ export default definePluginEntry({
         text: Type.String({ description: "The capture text to write" }),
       }),
       async execute(_toolCallId, params) {
+        const { slug, text } = params as { slug: string; text: string };
         const vaultPath = getVaultPath(api.getConfig());
         const timestamp = new Date().toISOString();
-        writeCapture(vaultPath, params.slug, params.text, timestamp);
+        writeCapture(vaultPath, slug, text, timestamp);
         return {
           content: [
-            { type: "text" as const, text: `Capture written to ${params.slug}/captures.md` },
+            { type: "text" as const, text: `Capture written to ${slug}/captures.md` },
           ],
-          details: { slug: params.slug, timestamp },
+          details: { slug, timestamp },
         };
       },
     });
@@ -206,9 +207,10 @@ export default definePluginEntry({
         text: Type.String({ description: "The capture text to write" }),
       }),
       async execute(_toolCallId, params) {
+        const { text } = params as { text: string };
         const vaultPath = getVaultPath(api.getConfig());
         const timestamp = new Date().toISOString();
-        writeInbox(vaultPath, params.text, timestamp);
+        writeInbox(vaultPath, text, timestamp);
         return {
           content: [{ type: "text" as const, text: "Capture written to _inbox.md" }],
           details: { timestamp },
@@ -230,15 +232,16 @@ export default definePluginEntry({
         description: Type.String({ description: "One-line bucket description" }),
       }),
       async execute(_toolCallId, params) {
-        validateSlug(params.slug);
+        const { slug, description } = params as { slug: string; description: string };
+        validateSlug(slug);
         const vaultPath = getVaultPath(api.getConfig());
         const bucketsBase = join(vaultPath, "OpenClaw", "buckets");
-        const bucketDir = join(bucketsBase, params.slug);
+        const bucketDir = join(bucketsBase, slug);
         assertWithinBase(bucketsBase, bucketDir);
         if (existsSync(bucketDir)) {
           return {
             content: [
-              { type: "text" as const, text: `Bucket ${params.slug} already exists.` },
+              { type: "text" as const, text: `Bucket ${slug} already exists.` },
             ],
             details: { created: false },
           };
@@ -246,31 +249,31 @@ export default definePluginEntry({
         mkdirSync(bucketDir, { recursive: true });
         const frontmatter = [
           "---",
-          `slug: ${params.slug}`,
-          `description: ${params.description}`,
+          `slug: ${slug}`,
+          `description: ${description}`,
           "aliases: []",
           "state: active",
           "last-commit: ",
           "repos: []",
           "---",
           "",
-          `# ${params.slug}`,
+          `# ${slug}`,
           "",
-          params.description,
+          description,
           "",
         ].join("\n");
         writeFileSync(join(bucketDir, "_bucket.md"), frontmatter);
-        writeFileSync(join(bucketDir, "captures.md"), `# Captures — ${params.slug}\n`);
-        writeFileSync(join(bucketDir, "memory.md"), `# Memory — ${params.slug}\n`);
+        writeFileSync(join(bucketDir, "captures.md"), `# Captures — ${slug}\n`);
+        writeFileSync(join(bucketDir, "memory.md"), `# Memory — ${slug}\n`);
         writeFileSync(
           join(bucketDir, "future-me.md"),
-          `# Future Me — ${params.slug}\n\nTangent captures parked here for later.\n`,
+          `# Future Me — ${slug}\n\nTangent captures parked here for later.\n`,
         );
         return {
           content: [
-            { type: "text" as const, text: `Bucket ${params.slug} scaffolded.` },
+            { type: "text" as const, text: `Bucket ${slug} scaffolded.` },
           ],
-          details: { created: true, slug: params.slug },
+          details: { created: true, slug },
         };
       },
     });

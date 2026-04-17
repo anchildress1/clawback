@@ -70,7 +70,7 @@ After classifying as a capture, do ALL of the following concurrently. Do NOT wai
 Known commands:
 - `/status` — call `clawback_status` and reply with the result.
 - `/move last to <slug>` — call `clawback_move_last_capture` with the source and destination slugs. Then call `clawback_add_alias` on the destination bucket with the capture text so the router learns. Sync the vault.
-- `/promote <slug>` — call `clawback_scaffold_bucket` with the slug and a description derived from context. Sync the vault.
+- `/promote <slug>` — if promoting from a future-me entry, call `clawback_promote_future_me`. Otherwise call `clawback_scaffold_bucket` with the slug and a description derived from context. Sync the vault.
 
 For unknown commands, reply: "Unknown command. Try /status, /move, or /promote."
 
@@ -81,3 +81,24 @@ For unknown commands, reply: "Unknown command. Try /status, /move, or /promote."
 3. If the question is cross-project, also call `clawback_read_personal_memory`.
 4. Answer from what you found. Be specific. Cite the source bucket.
 5. If you don't have enough information, say so — do NOT make up answers.
+
+## Step 5 — Handle reactions
+
+OpenClaw passes Discord reactions as events. Handle these:
+
+### ❌ reaction on an ack message (misroute correction)
+
+1. Identify the capture that was misrouted (the message the ❌ is on).
+2. Ask which bucket it should go to — this is the ONE exception to "never ask." The user reacted ❌ specifically to correct, so ask for the destination.
+3. Call `clawback_move_last_capture` with the source and destination slugs.
+4. Call `clawback_add_alias` on the destination bucket with the original capture text.
+5. Sync the vault.
+6. Reply: "Moved to <slug>. Alias learned. 👍"
+
+### 🎯 reaction on a future-me entry (promotion)
+
+1. Identify which bucket's `future-me.md` the reaction is on.
+2. Derive a slug from the capture content (lowercase, hyphens, ≤64 chars).
+3. Call `clawback_promote_future_me` with the source slug, new slug, and a description derived from the capture.
+4. Sync the vault.
+5. Reply: "Promoted to <slug>. 🎯"

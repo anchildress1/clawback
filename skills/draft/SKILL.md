@@ -22,13 +22,13 @@ The user provides:
 
 ## Sources (read all of these before writing)
 
-- `buckets/<slug>/memory.md` — consolidated project state
-- `buckets/<slug>/captures.md` — chronological raw captures
-- `buckets/<slug>/future-me.md` — tangent ideas that may be relevant
+- `OpenClaw/buckets/<slug>/memory.md` — consolidated project state
+- `OpenClaw/buckets/<slug>/captures.md` — chronological raw captures
+- `OpenClaw/buckets/<slug>/future-me.md` — tangent ideas that may be relevant
 
 ## Output
 
-Write the draft to `buckets/<slug>/drafts/<template>-<timestamp>.md`.
+Write the draft to `OpenClaw/buckets/<slug>/drafts/<template>-<timestamp>.md`.
 
 ## Rules
 

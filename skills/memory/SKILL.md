@@ -16,8 +16,8 @@ You extract structured project state from captures and write it to git-synced ma
 
 ## What you write
 
-- `buckets/<project>/memory.md` — per-project state. Your model of what's happening in this project. NOT a log — edit in place, consolidate, replace outdated entries.
-- `_personal.md` — cross-project personal patterns. How the user works, preferred approaches, recurring decisions. NOT project-specific.
+- `OpenClaw/buckets/<project>/memory.md` — per-project state. Your model of what's happening in this project. NOT a log — edit in place, consolidate, replace outdated entries.
+- `_personal.md` (vault root) — cross-project personal patterns. How the user works, preferred approaches, recurring decisions. NOT project-specific.
 
 ## Rules
 

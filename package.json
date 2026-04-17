@@ -2,11 +2,18 @@
   "name": "clawback",
   "version": "0.1.0",
   "description": "ADHD-friendly OpenClaw plugin that routes Discord captures into an Obsidian vault by project, with memory that learns how you work.",
-  "main": "src/index.ts",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "scripts": {
     "build": "tsc",
     "lint": "tsc --noEmit",
+    "prepublishOnly": "npm run build",
     "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "@types/node": "^22.0.0",
+    "@sinclair/typebox": "^0.34.0"
   },
   "repository": {
     "type": "git",

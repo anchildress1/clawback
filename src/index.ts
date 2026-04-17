@@ -1,8 +1,24 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { Type } from "@sinclair/typebox";
 import { execFileSync } from "child_process";
-import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync } from "fs";
-import { join } from "path";
+import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, statSync } from "fs";
+import { join, resolve } from "path";
+
+const SLUG_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
+
+function validateSlug(slug: string): void {
+  if (!SLUG_PATTERN.test(slug) || slug.length > 64) {
+    throw new Error(`Invalid slug: "${slug}". Must match /^[a-z0-9][a-z0-9-]*$/ and be ≤64 chars.`);
+  }
+}
+
+function assertWithinBase(basePath: string, targetPath: string): void {
+  const resolved = resolve(targetPath);
+  const base = resolve(basePath);
+  if (!resolved.startsWith(base + "/") && resolved !== base) {
+    throw new Error(`Path traversal blocked: ${resolved} is outside ${base}`);
+  }
+}
 
 function getVaultPath(config: Record<string, unknown>): string {
   const raw = (config.vaultPath as string) || "~/clawback-vault";
@@ -56,36 +72,60 @@ function readBucketManifest(vaultPath: string): BucketManifestEntry[] {
 
     entries.push({
       slug: slug.name,
-      description: frontmatter.description || "",
-      aliases: frontmatter.aliases || [],
-      state: frontmatter.state || "active",
-      lastCommit: frontmatter["last-commit"] || "",
-      repos: frontmatter.repos || [],
+      description: frontmatter.description,
+      aliases: frontmatter.aliases,
+      state: frontmatter.state,
+      lastCommit: frontmatter["last-commit"],
+      repos: frontmatter.repos,
       recentCaptures,
     });
   }
   return entries;
 }
 
-function parseFrontmatter(content: string): Record<string, unknown> {
+interface BucketFrontmatter {
+  description: string;
+  aliases: string[];
+  state: string;
+  "last-commit": string;
+  repos: string[];
+}
+
+function parseFrontmatter(content: string): BucketFrontmatter {
+  const defaults: BucketFrontmatter = {
+    description: "",
+    aliases: [],
+    state: "active",
+    "last-commit": "",
+    repos: [],
+  };
   const match = content.match(/^---\n([\s\S]*?)\n---/);
-  if (!match) return {};
-  const result: Record<string, unknown> = {};
+  if (!match) return defaults;
+
+  const raw: Record<string, string> = {};
   for (const line of match[1].split("\n")) {
-    const [key, ...rest] = line.split(":");
-    if (!key) continue;
-    const value = rest.join(":").trim();
-    if (value.startsWith("[")) {
-      try {
-        result[key.trim()] = JSON.parse(value);
-      } catch {
-        result[key.trim()] = value;
-      }
-    } else {
-      result[key.trim()] = value;
+    const colonIdx = line.indexOf(":");
+    if (colonIdx < 0) continue;
+    raw[line.slice(0, colonIdx).trim()] = line.slice(colonIdx + 1).trim();
+  }
+
+  function parseStringArray(value: string | undefined): string[] {
+    if (!value) return [];
+    try {
+      const parsed: unknown = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === "string") : [];
+    } catch {
+      return [];
     }
   }
-  return result;
+
+  return {
+    description: raw["description"] ?? defaults.description,
+    aliases: parseStringArray(raw["aliases"]),
+    state: raw["state"] ?? defaults.state,
+    "last-commit": raw["last-commit"] ?? defaults["last-commit"],
+    repos: parseStringArray(raw["repos"]),
+  };
 }
 
 function writeCapture(
@@ -94,7 +134,10 @@ function writeCapture(
   text: string,
   timestamp: string,
 ): void {
-  const bucketDir = join(vaultPath, "OpenClaw", "buckets", slug);
+  validateSlug(slug);
+  const bucketsBase = join(vaultPath, "OpenClaw", "buckets");
+  const bucketDir = join(bucketsBase, slug);
+  assertWithinBase(bucketsBase, bucketDir);
   if (!existsSync(bucketDir)) {
     mkdirSync(bucketDir, { recursive: true });
   }
@@ -233,8 +276,11 @@ export default definePluginEntry({
         description: Type.String({ description: "One-line bucket description" }),
       }),
       async execute(_toolCallId, params) {
+        validateSlug(params.slug);
         const vaultPath = getVaultPath(api.getConfig());
-        const bucketDir = join(vaultPath, "OpenClaw", "buckets", params.slug);
+        const bucketsBase = join(vaultPath, "OpenClaw", "buckets");
+        const bucketDir = join(bucketsBase, params.slug);
+        assertWithinBase(bucketsBase, bucketDir);
         if (existsSync(bucketDir)) {
           return {
             content: [
@@ -303,11 +349,23 @@ export default definePluginEntry({
           monitoring: "👁️",
           archived: "📦",
         };
-        const lines = manifest.map((b) => {
+        const now = Date.now();
+        const bucketLines = manifest.map((b) => {
           const emoji = stateEmoji[b.state] || "❓";
-          const count = b.recentCaptures.length;
-          return `${emoji} **${b.slug}** [${b.state}] — ${count} recent captures`;
+          const capturesFile = join(getVaultPath(api.getConfig()), "OpenClaw", "buckets", b.slug, "captures.md");
+          const totalCaptures = existsSync(capturesFile)
+            ? readFileSync(capturesFile, "utf-8").split("\n---\n").filter(Boolean).length
+            : 0;
+          const lastCaptureStat = existsSync(capturesFile) ? statSync(capturesFile).mtimeMs : 0;
+          const daysIdle = lastCaptureStat > 0 ? Math.floor((now - lastCaptureStat) / 86_400_000) : -1;
+          let idleStr: string;
+          if (daysIdle < 0) idleStr = "no captures";
+          else if (daysIdle === 0) idleStr = "today";
+          else idleStr = `${daysIdle}d idle`;
+          return { line: `${emoji} **${b.slug}** [${b.state}] — ${totalCaptures} captures, ${idleStr}`, daysIdle };
         });
+        bucketLines.sort((a, b) => b.daysIdle - a.daysIdle);
+        const lines = bucketLines.map((b) => b.line);
         return {
           content: [{ type: "text" as const, text: lines.join("\n") }],
           details: { bucketCount: manifest.length },

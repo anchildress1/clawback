@@ -24,7 +24,7 @@ You evaluate alerting rules against watcher data and send Discord pings. Called 
 5. **New DEV notification** — a `[notification]` entry in `watchers/dev-comments.md` → Discord ping.
 6. **New challenge** — the dev-watcher flagged a new challenge → Discord ping.
 
-## Rules
+## Delivery constraints
 
 - Send each alert exactly once. Track sent alerts in `~/.clawback/cache.json`.
 - Do NOT batch alerts into a single message. One ping per alert.

@@ -161,7 +161,7 @@ user-invocable: true
 Instructions. Markdown. Tells the model how to behave.
 ```
 
-Single-line YAML frontmatter only. See `https://docs.openclaw.ai/tools/skills`.
+Valid YAML frontmatter. Multi-line is allowed when needed (e.g., `description: >` and nested `metadata`), though simple single-line fields are preferred when sufficient. See `https://docs.openclaw.ai/tools/skills`.
 
 ### Plugin manifest
 

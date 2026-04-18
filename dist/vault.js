@@ -138,3 +138,150 @@ export function autoDiscoverBuckets(vaultPath) {
     }
     return discovered;
 }
+export function addAlias(vaultPath, slug, alias) {
+    validateSlug(slug);
+    const bucketsBase = join(vaultPath, "OpenClaw", "buckets");
+    const bucketFile = join(bucketsBase, slug, "_bucket.md");
+    assertWithinBase(bucketsBase, bucketFile);
+    if (!existsSync(bucketFile)) {
+        throw new Error(`Bucket ${slug} does not exist.`);
+    }
+    const { data: fm, content: body } = matter(readFileSync(bucketFile, "utf-8"));
+    const normalized = alias.toLowerCase().trim();
+    if (fm.aliases.includes(normalized)) {
+        return { added: false, normalized };
+    }
+    fm.aliases.push(normalized);
+    writeFileSync(bucketFile, stringifyMatter(fm, body));
+    return { added: true, normalized };
+}
+export function moveLastCapture(vaultPath, fromSlug, toSlug) {
+    validateSlug(fromSlug);
+    validateSlug(toSlug);
+    const bucketsBase = join(vaultPath, "OpenClaw", "buckets");
+    const fromCapturesFile = join(bucketsBase, fromSlug, "captures.md");
+    assertWithinBase(bucketsBase, fromCapturesFile);
+    if (!existsSync(fromCapturesFile)) {
+        throw new Error(`No captures found in ${fromSlug}.`);
+    }
+    const content = readFileSync(fromCapturesFile, "utf-8");
+    const chunks = content.split("\n---\n");
+    const captureChunks = chunks.filter((chunk) => chunk.includes("**"));
+    if (captureChunks.length === 0) {
+        throw new Error(`No captures to move in ${fromSlug}.`);
+    }
+    const lastCapture = captureChunks[captureChunks.length - 1];
+    const lastIndex = chunks.lastIndexOf(lastCapture);
+    chunks.splice(lastIndex, 1);
+    writeFileSync(fromCapturesFile, chunks.join("\n---\n"));
+    const tsMatch = /\*\*(.+?)\*\*/.exec(lastCapture);
+    const timestamp = tsMatch ? tsMatch[1] : new Date().toISOString();
+    const captureText = lastCapture.replace(/\*\*.*?\*\*\n?/, "").trim();
+    writeCapture(vaultPath, toSlug, captureText, timestamp);
+    return { captureText, timestamp };
+}
+export function promoteFutureMe(vaultPath, sourceSlug, newSlug, description) {
+    validateSlug(sourceSlug);
+    validateSlug(newSlug);
+    if (sourceSlug === newSlug) {
+        throw new Error("Cannot promote into the same bucket.");
+    }
+    const bucketsBase = join(vaultPath, "OpenClaw", "buckets");
+    const newBucketDir = join(bucketsBase, newSlug);
+    assertWithinBase(bucketsBase, newBucketDir);
+    if (existsSync(newBucketDir)) {
+        throw new Error(`Bucket ${newSlug} already exists. Promotion creates a new bucket.`);
+    }
+    const futureFile = join(bucketsBase, sourceSlug, "future-me.md");
+    assertWithinBase(bucketsBase, futureFile);
+    if (!existsSync(futureFile)) {
+        throw new Error(`No future-me.md in ${sourceSlug}.`);
+    }
+    const content = readFileSync(futureFile, "utf-8");
+    const chunks = content.split("\n---\n");
+    const entryChunks = chunks.filter((chunk) => chunk.includes("**"));
+    if (entryChunks.length === 0) {
+        throw new Error(`No entries in ${sourceSlug}/future-me.md to promote.`);
+    }
+    const lastEntry = entryChunks[entryChunks.length - 1];
+    const tsMatch = /\*\*(.+?)\*\*/.exec(lastEntry);
+    const timestamp = tsMatch ? tsMatch[1] : new Date().toISOString();
+    const captureText = lastEntry.replace(/\*\*.*?\*\*\n?/, "").trim();
+    // Write destination first — if this fails, source is untouched
+    mkdirSync(newBucketDir, { recursive: true });
+    const bucketMd = stringifyMatter({ slug: newSlug, description, aliases: [], state: "active", "last-commit": "", repos: [] }, `\n# ${newSlug}\n\n${description}\n`);
+    writeFileSync(join(newBucketDir, "_bucket.md"), bucketMd);
+    writeFileSync(join(newBucketDir, "memory.md"), `# Memory — ${newSlug}\n`);
+    writeFileSync(join(newBucketDir, "future-me.md"), `# Future Me — ${newSlug}\n\nTangent captures parked here for later.\n`);
+    writeCapture(vaultPath, newSlug, captureText, timestamp);
+    // Destination succeeded — now remove from source
+    const lastIndex = chunks.lastIndexOf(lastEntry);
+    chunks.splice(lastIndex, 1);
+    writeFileSync(futureFile, chunks.join("\n---\n"));
+    return { captureText, timestamp };
+}
+// --- Day 4: watchers, draft, conflicts, last-commit ---
+export function writeWatcher(vaultPath, filename, entry) {
+    const allowed = ["pr-alerts.md", "dev-comments.md"];
+    if (!allowed.includes(filename)) {
+        throw new Error(`Invalid watcher file: "${filename}". Allowed: ${allowed.join(", ")}`);
+    }
+    const watchersDir = join(vaultPath, "watchers");
+    if (!existsSync(watchersDir)) {
+        mkdirSync(watchersDir, { recursive: true });
+    }
+    const filePath = join(watchersDir, filename);
+    const heading = filename === "pr-alerts.md" ? "# PR Alerts" : "# DEV Comments & Notifications";
+    if (existsSync(filePath)) {
+        appendFileSync(filePath, entry);
+    }
+    else {
+        writeFileSync(filePath, `${heading}\n${entry}`);
+    }
+}
+export function readWatcher(vaultPath, filename) {
+    const allowed = ["pr-alerts.md", "dev-comments.md"];
+    if (!allowed.includes(filename)) {
+        throw new Error(`Invalid watcher file: "${filename}". Allowed: ${allowed.join(", ")}`);
+    }
+    const filePath = join(vaultPath, "watchers", filename);
+    if (!existsSync(filePath))
+        return "";
+    return readFileSync(filePath, "utf-8");
+}
+export function writeDraft(vaultPath, slug, templateName, content) {
+    validateSlug(slug);
+    const bucketsBase = join(vaultPath, "OpenClaw", "buckets");
+    const draftsDir = join(bucketsBase, slug, "drafts");
+    assertWithinBase(bucketsBase, draftsDir);
+    if (!existsSync(draftsDir)) {
+        mkdirSync(draftsDir, { recursive: true });
+    }
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    const filename = `${templateName}-${timestamp}.md`;
+    const filePath = join(draftsDir, filename);
+    writeFileSync(filePath, content);
+    return filename;
+}
+export function writeConflicts(vaultPath, content) {
+    const conflictsFile = join(vaultPath, "_conflicts.md");
+    writeFileSync(conflictsFile, content);
+}
+export function readConflicts(vaultPath) {
+    const conflictsFile = join(vaultPath, "_conflicts.md");
+    if (!existsSync(conflictsFile))
+        return "";
+    return readFileSync(conflictsFile, "utf-8");
+}
+export function updateLastCommit(vaultPath, slug, timestamp) {
+    validateSlug(slug);
+    const bucketsBase = join(vaultPath, "OpenClaw", "buckets");
+    const bucketFile = join(bucketsBase, slug, "_bucket.md");
+    assertWithinBase(bucketsBase, bucketFile);
+    if (!existsSync(bucketFile)) {
+        throw new Error(`Bucket ${slug} does not exist.`);
+    }
+    const { data: fm, content: body } = matter(readFileSync(bucketFile, "utf-8"));
+    fm["last-commit"] = timestamp;
+    writeFileSync(bucketFile, stringifyMatter(fm, body));
+}

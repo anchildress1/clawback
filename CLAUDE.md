@@ -1,7 +1,8 @@
 # Clawback — Project Instructions
 
-Read [`AGENTS.md`](./AGENTS.md) for architecture, skill inventory, memory layers, and hard rules.
-Read [`sprint-board.md`](./sprint-board.md) for day-by-day timeline and gates.
+Read [`AGENTS.md`](./AGENTS.md) for architecture, skill inventory, and hard rules.
+Read [`openclaw-adhd-agent-prd.md`](./openclaw-adhd-agent-prd.md) for the full spec (source of truth).
+Read [`TTD.md`](./TTD.md) for known drift between codebase and PRD. Fix drift before adding features.
 
 ## Git workflow
 
@@ -19,7 +20,7 @@ Gemini Flash Lite 3.1 preview (`google/gemini-3.1-flash-lite-preview`). Configur
 - **No backwards compatibility code.** No shims, no deprecated re-exports, no feature flags for old behavior. Just change it.
 - **Use built-in OpenClaw features first.** Audit ClawHub before writing custom skills. Don't reinvent session memory, web search, or channel handling.
 - **Always-edit, not append-only.** Memory files are the agent's model of the world, not a log. Consolidate by default.
-- **Parallel LLM calls.** The capture orchestrator fans out route + memory + answer concurrently. Never serialize what can run in parallel.
+- **Synchronous capture in v1.** Single triage pass. Parallel fanout is v2.
 - **Thesis filter.** Agent ACTS and learns. If a feature doesn't do both, cut it.
 
 ## Public / private boundary

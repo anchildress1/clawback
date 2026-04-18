@@ -20,7 +20,7 @@ End-to-end test that proves the Discord → vault round-trip. Run this before re
 | 2 | capture (same project, **consolidate**) | `actually pivoting — lead with the ADHD framing, not the thesis filter` | "Updated `clawback`" | `memory.md` **edited in place** — reflects pivot only. `git diff` shows a replacement, not a new line. `captures.md` has both entries (raw log). |
 | 3 | capture (different project) | `ordered retaining wall blocks from the sand yard, delivery Saturday` | "Filed to new bucket `yard`" (or similar) | Second bucket created. **Zero writes** to `buckets/clawback/`. |
 | 4 | question | `what's the current plan for the clawback post?` | Replies with 1–2 sentence summary sourced from `memory.md` | No vault change |
-| 5 | command | `promote the thesis-filter capture to a draft` | "Drafted → `buckets/clawback/drafts/thesis-filter.md`" | draft file written |
+| 5 | command | `draft the opening paragraph for the clawback post` | "Drafted opening → `buckets/clawback/drafts/clawback-post.md`" | `blog-writer` seeds paragraph 1 from `memory.md` (ADHD framing, per the consolidated memory) |
 | 6 | watcher nudge | (no DM — wait) | Inbound DM from bot: "PR #X on `clawback` has been open >24h" | `watchers/pr-alerts.md` updated |
 
 ## Pass criteria

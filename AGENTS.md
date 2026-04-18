@@ -197,7 +197,7 @@ Five skills for v1. All in `skills/`. Each is a folder with a `SKILL.md`.
 | `pr-watcher` | Scheduled. Polls GitHub repos per-bucket for PRs awaiting action. Records last-Ashley-commit timestamp from contribution graph → feeds temporal tiebreaker + stale-contribution alert. |
 | `dev-watcher` | Scheduled. Three jobs: (1) post comments for `monitoring` buckets, (2) Ashley's DEV notification feed, (3) challenge index. All share `~/.clawback/cache.json`. |
 | `surface` | Rules-based Discord alerting. PR >24h, stale bucket, stale contribution ("still current?"), new DEV activity. |
-| `draft` | Takes bucket slug + template → produces markdown under `drafts/`. Contradiction flagging directive in system prompt. Editor, not just writer. |
+| `blog-writer` | Paragraph-at-a-time long-form creation. Takes bucket slug + template → grows markdown under `drafts/` as captures accumulate. Edits previous paragraphs in place; contradiction flagging directive in system prompt. Editor, not just writer. |
 | `voice-template` | Public voice interface — structure only, zero personal content. Private `ashley-voice` overrides at workspace scope. |
 
 ### Status (Day 5)

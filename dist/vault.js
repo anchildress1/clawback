@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, appendFileSync, readdirSync, existsSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, appendFileSync, readdirSync, existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { join, resolve, relative, sep } from "node:path";
 import { homedir } from "node:os";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
@@ -26,12 +26,11 @@ export function getVaultPath(pluginConfig) {
     return raw.replace(/^~/, homedir());
 }
 export const BUCKET_DEFAULTS = {
-    slug: "",
-    description: "",
+    canonical: "",
     aliases: [],
-    state: "active",
-    "last-commit": "",
-    repos: [],
+    git_repo: "",
+    vault_refs: [],
+    last_activity: "",
 };
 export function matter(input) {
     const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(input);
@@ -66,12 +65,11 @@ export function readBucketManifest(vaultPath) {
                 .slice(-3)
             : [];
         entries.push({
-            slug: slug.name,
-            description: fm.description,
+            canonical: slug.name,
             aliases: fm.aliases,
-            state: fm.state,
-            lastCommit: fm["last-commit"],
-            repos: fm.repos,
+            gitRepo: fm.git_repo,
+            vaultRefs: fm.vault_refs,
+            lastActivity: fm.last_activity,
             recentCaptures,
         });
     }
@@ -102,21 +100,19 @@ export function writeInbox(vaultPath, text, timestamp) {
         appendFileSync(inboxFile, entry);
     }
     else {
-        writeFileSync(inboxFile, `# Inbox\n\nLow-confidence captures. Review and route manually or correct with ❌.\n${entry}`);
+        writeFileSync(inboxFile, `# Inbox\n\nLow-confidence captures. Review and route manually.\n${entry}`);
     }
 }
 // --- Auto-discovery ---
-function scaffoldBucket(bucketsDir, slug) {
-    const description = `Auto-discovered from vault folder "${slug}"`;
-    const bucketMd = stringifyMatter({ slug, description, aliases: [], state: "active", "last-commit": "", repos: [] }, `\n# ${slug}\n\n${description}\n`);
-    writeFileSync(join(bucketsDir, slug, "_bucket.md"), bucketMd);
+function scaffoldBucket(bucketsDir, canonical) {
+    const bucketMd = stringifyMatter({ canonical, aliases: [], git_repo: "", vault_refs: [], last_activity: "" }, `\n# ${canonical}\n`);
+    writeFileSync(join(bucketsDir, canonical, "_bucket.md"), bucketMd);
     const files = [
-        ["captures.md", `# Captures — ${slug}\n`],
-        ["memory.md", `# Memory — ${slug}\n`],
-        ["future-me.md", `# Future Me — ${slug}\n\nTangent captures parked here for later.\n`],
+        ["captures.md", `# Captures — ${canonical}\n`],
+        ["memory.md", `# Memory — ${canonical}\n`],
     ];
     for (const [name, content] of files) {
-        const filePath = join(bucketsDir, slug, name);
+        const filePath = join(bucketsDir, canonical, name);
         if (!existsSync(filePath))
             writeFileSync(filePath, content);
     }
@@ -138,13 +134,13 @@ export function autoDiscoverBuckets(vaultPath) {
     }
     return discovered;
 }
-export function addAlias(vaultPath, slug, alias) {
-    validateSlug(slug);
+export function addAlias(vaultPath, canonical, alias) {
+    validateSlug(canonical);
     const bucketsBase = join(vaultPath, "OpenClaw", "buckets");
-    const bucketFile = join(bucketsBase, slug, "_bucket.md");
+    const bucketFile = join(bucketsBase, canonical, "_bucket.md");
     assertWithinBase(bucketsBase, bucketFile);
     if (!existsSync(bucketFile)) {
-        throw new Error(`Bucket ${slug} does not exist.`);
+        throw new Error(`Bucket ${canonical} does not exist.`);
     }
     const { data: fm, content: body } = matter(readFileSync(bucketFile, "utf-8"));
     const normalized = alias.toLowerCase().trim();
@@ -180,108 +176,257 @@ export function moveLastCapture(vaultPath, fromSlug, toSlug) {
     writeCapture(vaultPath, toSlug, captureText, timestamp);
     return { captureText, timestamp };
 }
-export function promoteFutureMe(vaultPath, sourceSlug, newSlug, description) {
-    validateSlug(sourceSlug);
-    validateSlug(newSlug);
-    if (sourceSlug === newSlug) {
-        throw new Error("Cannot promote into the same bucket.");
-    }
+export function promoteFutureMe(vaultPath, newCanonical) {
+    validateSlug(newCanonical);
     const bucketsBase = join(vaultPath, "OpenClaw", "buckets");
-    const newBucketDir = join(bucketsBase, newSlug);
+    const newBucketDir = join(bucketsBase, newCanonical);
     assertWithinBase(bucketsBase, newBucketDir);
     if (existsSync(newBucketDir)) {
-        throw new Error(`Bucket ${newSlug} already exists. Promotion creates a new bucket.`);
+        throw new Error(`Bucket ${newCanonical} already exists. Promotion creates a new bucket.`);
     }
-    const futureFile = join(bucketsBase, sourceSlug, "future-me.md");
-    assertWithinBase(bucketsBase, futureFile);
+    const futureFile = join(vaultPath, "future-me.md");
     if (!existsSync(futureFile)) {
-        throw new Error(`No future-me.md in ${sourceSlug}.`);
+        throw new Error("No future-me.md at vault root.");
     }
     const content = readFileSync(futureFile, "utf-8");
     const chunks = content.split("\n---\n");
     const entryChunks = chunks.filter((chunk) => chunk.includes("**"));
     if (entryChunks.length === 0) {
-        throw new Error(`No entries in ${sourceSlug}/future-me.md to promote.`);
+        throw new Error("No entries in future-me.md to promote.");
     }
     const lastEntry = entryChunks[entryChunks.length - 1];
     const tsMatch = /\*\*(.+?)\*\*/.exec(lastEntry);
     const timestamp = tsMatch ? tsMatch[1] : new Date().toISOString();
-    const captureText = lastEntry.replace(/\*\*.*?\*\*\n?/, "").trim();
+    const captureText = lastEntry.replace(/\*\*.*?\*\*[^\n]*\n?/, "").trim();
     // Write destination first — if this fails, source is untouched
     mkdirSync(newBucketDir, { recursive: true });
-    const bucketMd = stringifyMatter({ slug: newSlug, description, aliases: [], state: "active", "last-commit": "", repos: [] }, `\n# ${newSlug}\n\n${description}\n`);
+    const bucketMd = stringifyMatter({ canonical: newCanonical, aliases: [], git_repo: "", vault_refs: [], last_activity: "" }, `\n# ${newCanonical}\n`);
     writeFileSync(join(newBucketDir, "_bucket.md"), bucketMd);
-    writeFileSync(join(newBucketDir, "memory.md"), `# Memory — ${newSlug}\n`);
-    writeFileSync(join(newBucketDir, "future-me.md"), `# Future Me — ${newSlug}\n\nTangent captures parked here for later.\n`);
-    writeCapture(vaultPath, newSlug, captureText, timestamp);
+    writeFileSync(join(newBucketDir, "memory.md"), `# Memory — ${newCanonical}\n`);
+    writeCapture(vaultPath, newCanonical, captureText, timestamp);
     // Destination succeeded — now remove from source
     const lastIndex = chunks.lastIndexOf(lastEntry);
     chunks.splice(lastIndex, 1);
     writeFileSync(futureFile, chunks.join("\n---\n"));
     return { captureText, timestamp };
 }
-// --- Day 4: watchers, draft, conflicts, last-commit ---
-export function writeWatcher(vaultPath, filename, entry) {
-    const allowed = ["pr-alerts.md", "dev-comments.md"];
-    if (!allowed.includes(filename)) {
-        throw new Error(`Invalid watcher file: "${filename}". Allowed: ${allowed.join(", ")}`);
-    }
-    const watchersDir = join(vaultPath, "watchers");
-    if (!existsSync(watchersDir)) {
-        mkdirSync(watchersDir, { recursive: true });
-    }
-    const filePath = join(watchersDir, filename);
-    const heading = filename === "pr-alerts.md" ? "# PR Alerts" : "# DEV Comments & Notifications";
-    if (existsSync(filePath)) {
-        appendFileSync(filePath, entry);
+// --- Future-me (flat file at vault root) ---
+export function writeFutureMe(vaultPath, text, bucketHint, timestamp) {
+    const futureFile = join(vaultPath, "future-me.md");
+    const entry = `\n---\n**${timestamp}** [${bucketHint}]\n${text}\n`;
+    if (existsSync(futureFile)) {
+        appendFileSync(futureFile, entry);
     }
     else {
-        writeFileSync(filePath, `${heading}\n${entry}`);
+        writeFileSync(futureFile, `# Future Me\n\nTangent captures parked here for later.\n${entry}`);
     }
 }
-export function readWatcher(vaultPath, filename) {
-    const allowed = ["pr-alerts.md", "dev-comments.md"];
-    if (!allowed.includes(filename)) {
-        throw new Error(`Invalid watcher file: "${filename}". Allowed: ${allowed.join(", ")}`);
+// --- Workspace path ---
+export function getWorkspacePath(pluginConfig) {
+    const raw = pluginConfig.workspacePath || "~/clawback-vault/openclaw";
+    return raw.replace(/^~/, homedir());
+}
+export function appendTriageLog(workspacePath, entry) {
+    if (!existsSync(workspacePath)) {
+        mkdirSync(workspacePath, { recursive: true });
     }
-    const filePath = join(vaultPath, "watchers", filename);
-    if (!existsSync(filePath))
+    const logFile = join(workspacePath, "triage-log.md");
+    const row = `\n| ${entry.timestamp} | ${entry.classification} | ${entry.target} | ${entry.action} | ${entry.raw.slice(0, 80)} |\n`;
+    if (existsSync(logFile)) {
+        appendFileSync(logFile, row);
+    }
+    else {
+        writeFileSync(logFile, `# Triage Log\n\n| Time | Class | Target | Action | Message |\n|---|---|---|---|---|\n${row}`);
+    }
+}
+export function readTriageLog(workspacePath) {
+    const logFile = join(workspacePath, "triage-log.md");
+    if (!existsSync(logFile))
         return "";
-    return readFileSync(filePath, "utf-8");
+    return readFileSync(logFile, "utf-8");
 }
-export function writeDraft(vaultPath, slug, templateName, content) {
-    validateSlug(slug);
-    const bucketsBase = join(vaultPath, "OpenClaw", "buckets");
-    const draftsDir = join(bucketsBase, slug, "drafts");
-    assertWithinBase(bucketsBase, draftsDir);
-    if (!existsSync(draftsDir)) {
-        mkdirSync(draftsDir, { recursive: true });
+export function writeFocus(workspacePath, focus) {
+    if (!existsSync(workspacePath)) {
+        mkdirSync(workspacePath, { recursive: true });
     }
-    const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-    const filename = `${templateName}-${timestamp}.md`;
-    const filePath = join(draftsDir, filename);
-    writeFileSync(filePath, content);
-    return filename;
+    const focusFile = join(workspacePath, "focus.md");
+    const content = stringifyMatter(focus, `\n# Focus\n\nCurrent agent focus state.\n`);
+    writeFileSync(focusFile, content);
 }
-export function writeConflicts(vaultPath, content) {
-    const conflictsFile = join(vaultPath, "_conflicts.md");
-    writeFileSync(conflictsFile, content);
+export function readFocus(workspacePath) {
+    const focusFile = join(workspacePath, "focus.md");
+    if (!existsSync(focusFile))
+        return null;
+    const { data } = matter(readFileSync(focusFile, "utf-8"));
+    return {
+        mode: data.mode || "idle",
+        activeBucket: data.activeBucket || "",
+        artifactRef: data.artifactRef || "",
+        startedAt: data.startedAt || "",
+    };
 }
-export function readConflicts(vaultPath) {
-    const conflictsFile = join(vaultPath, "_conflicts.md");
-    if (!existsSync(conflictsFile))
+// --- Pause ---
+export function writePause(workspacePath, expiry) {
+    if (!existsSync(workspacePath)) {
+        mkdirSync(workspacePath, { recursive: true });
+    }
+    const pauseFile = join(workspacePath, "pause.md");
+    writeFileSync(pauseFile, `---\nexpiry: "${expiry}"\n---\n\nAgent is paused.\n`);
+}
+export function readPause(workspacePath) {
+    const pauseFile = join(workspacePath, "pause.md");
+    if (!existsSync(pauseFile))
+        return null;
+    const { data } = matter(readFileSync(pauseFile, "utf-8"));
+    return data.expiry || null;
+}
+export function clearPause(workspacePath) {
+    const pauseFile = join(workspacePath, "pause.md");
+    if (!existsSync(pauseFile))
+        return false;
+    unlinkSync(pauseFile);
+    return true;
+}
+export function addHold(workspacePath, holdPath, persistent) {
+    if (!existsSync(workspacePath)) {
+        mkdirSync(workspacePath, { recursive: true });
+    }
+    const holdsFile = join(workspacePath, "holds.md");
+    const entry = `- ${holdPath}${persistent ? " (persistent)" : ""}\n`;
+    if (existsSync(holdsFile)) {
+        appendFileSync(holdsFile, entry);
+    }
+    else {
+        writeFileSync(holdsFile, `# Holds\n\nPaths the agent must not touch.\n\n${entry}`);
+    }
+}
+export function listHolds(workspacePath) {
+    const holdsFile = join(workspacePath, "holds.md");
+    if (!existsSync(holdsFile))
+        return [];
+    const content = readFileSync(holdsFile, "utf-8");
+    const holds = [];
+    for (const line of content.split("\n")) {
+        const match = /^- (.+?)( \(persistent\))?$/.exec(line);
+        if (match) {
+            holds.push({ path: match[1], persistent: !!match[2] });
+        }
+    }
+    return holds;
+}
+export function removeHold(workspacePath, holdPath) {
+    const holdsFile = join(workspacePath, "holds.md");
+    if (!existsSync(holdsFile))
+        return false;
+    const content = readFileSync(holdsFile, "utf-8");
+    const lines = content.split("\n");
+    const filtered = lines.filter((line) => {
+        const match = /^- (.+?)( \(persistent\))?$/.exec(line);
+        return !(match && match[1] === holdPath);
+    });
+    if (filtered.length === lines.length)
+        return false;
+    writeFileSync(holdsFile, filtered.join("\n"));
+    return true;
+}
+// --- Daily notes ---
+export function appendDailyNote(workspacePath, date, entry) {
+    const memoryDir = join(workspacePath, "memory");
+    if (!existsSync(memoryDir)) {
+        mkdirSync(memoryDir, { recursive: true });
+    }
+    const noteFile = join(memoryDir, `${date}.md`);
+    if (existsSync(noteFile)) {
+        appendFileSync(noteFile, `\n${entry}\n`);
+    }
+    else {
+        writeFileSync(noteFile, `# ${date}\n\n${entry}\n`);
+    }
+}
+export function readDailyNote(workspacePath, date) {
+    const noteFile = join(workspacePath, "memory", `${date}.md`);
+    if (!existsSync(noteFile))
         return "";
-    return readFileSync(conflictsFile, "utf-8");
+    return readFileSync(noteFile, "utf-8");
 }
-export function updateLastCommit(vaultPath, slug, timestamp) {
-    validateSlug(slug);
+// --- Runtime AGENTS.md scaffold ---
+export function scaffoldRuntimeAgentsMd(workspacePath) {
+    if (!existsSync(workspacePath)) {
+        mkdirSync(workspacePath, { recursive: true });
+    }
+    const agentsFile = join(workspacePath, "AGENTS.md");
+    if (existsSync(agentsFile))
+        return false;
+    const content = `# AGENTS.md — Living Config
+
+This file is the agent's runtime configuration. It starts with structure only.
+Rules accumulate through corrections observed by the \`review-patterns\` job.
+Co-authored by user and agent.
+
+---
+
+## Decision categories
+
+### Routing
+<!-- Rules for routing captures to buckets will be added here by review-patterns -->
+
+### Classification
+<!-- Rules for classifying intent (capture/command/question) -->
+
+### Tone
+<!-- Voice and response style rules -->
+
+## Default posture
+
+- Ask on unknown references.
+- Route silently on known aliases.
+- Correction is text in chat.
+- Log every decision to triage-log.md.
+
+## Correction logging
+
+Every correction the user makes is logged with:
+- Original classification/routing
+- Corrected classification/routing
+- Timestamp
+
+## Job cadence
+
+- Triage log roll-up: daily
+- Pattern review: daily
+- Future-me review: daily
+- GitHub activity check: per job schedule
+
+## Holds
+
+- Ephemeral by default (session-scoped)
+- Persistent if user says "remember that"
+
+## Dispatcher
+
+- Check pause.md before every tick
+- One job at a time within a tick
+- Fail gracefully, increment fail_count
+
+## Pause
+
+- "Be quiet" → write pause.md with expiry
+- "Ok" → clear pause.md
+- Check before any unsolicited message
+`;
+    writeFileSync(agentsFile, content);
+    return true;
+}
+// --- Last activity ---
+export function updateLastActivity(vaultPath, canonical, timestamp) {
+    validateSlug(canonical);
     const bucketsBase = join(vaultPath, "OpenClaw", "buckets");
-    const bucketFile = join(bucketsBase, slug, "_bucket.md");
+    const bucketFile = join(bucketsBase, canonical, "_bucket.md");
     assertWithinBase(bucketsBase, bucketFile);
     if (!existsSync(bucketFile)) {
-        throw new Error(`Bucket ${slug} does not exist.`);
+        throw new Error(`Bucket ${canonical} does not exist.`);
     }
     const { data: fm, content: body } = matter(readFileSync(bucketFile, "utf-8"));
-    fm["last-commit"] = timestamp;
+    fm.last_activity = timestamp;
     writeFileSync(bucketFile, stringifyMatter(fm, body));
 }

@@ -4,12 +4,11 @@ export declare function assertWithinBase(basePath: string, targetPath: string): 
 export declare function getVaultPath(pluginConfig: Record<string, unknown>): string;
 export interface BucketFrontmatter {
     [key: string]: unknown;
-    slug: string;
-    description: string;
+    canonical: string;
     aliases: string[];
-    state: string;
-    "last-commit": string;
-    repos: string[];
+    git_repo: string;
+    vault_refs: string[];
+    last_activity: string;
 }
 export declare const BUCKET_DEFAULTS: BucketFrontmatter;
 export interface MatterResult {
@@ -19,12 +18,11 @@ export interface MatterResult {
 export declare function matter(input: string): MatterResult;
 export declare function stringifyMatter(data: Record<string, unknown>, content: string): string;
 export interface BucketManifestEntry {
-    slug: string;
-    description: string;
+    canonical: string;
     aliases: string[];
-    state: string;
-    lastCommit: string;
-    repos: string[];
+    gitRepo: string;
+    vaultRefs: string[];
+    lastActivity: string;
     recentCaptures: string[];
 }
 export declare function readBucketManifest(vaultPath: string): BucketManifestEntry[];
@@ -35,7 +33,7 @@ export interface AddAliasResult {
     added: boolean;
     normalized: string;
 }
-export declare function addAlias(vaultPath: string, slug: string, alias: string): AddAliasResult;
+export declare function addAlias(vaultPath: string, canonical: string, alias: string): AddAliasResult;
 export interface MoveLastCaptureResult {
     captureText: string;
     timestamp: string;
@@ -45,10 +43,37 @@ export interface PromoteFutureMeResult {
     captureText: string;
     timestamp: string;
 }
-export declare function promoteFutureMe(vaultPath: string, sourceSlug: string, newSlug: string, description: string): PromoteFutureMeResult;
-export declare function writeWatcher(vaultPath: string, filename: string, entry: string): void;
-export declare function readWatcher(vaultPath: string, filename: string): string;
-export declare function writeDraft(vaultPath: string, slug: string, templateName: string, content: string): string;
-export declare function writeConflicts(vaultPath: string, content: string): void;
-export declare function readConflicts(vaultPath: string): string;
-export declare function updateLastCommit(vaultPath: string, slug: string, timestamp: string): void;
+export declare function promoteFutureMe(vaultPath: string, newCanonical: string): PromoteFutureMeResult;
+export declare function writeFutureMe(vaultPath: string, text: string, bucketHint: string, timestamp: string): void;
+export declare function getWorkspacePath(pluginConfig: Record<string, unknown>): string;
+export interface TriageLogEntry {
+    timestamp: string;
+    raw: string;
+    classification: string;
+    target: string;
+    action: string;
+}
+export declare function appendTriageLog(workspacePath: string, entry: TriageLogEntry): void;
+export declare function readTriageLog(workspacePath: string): string;
+export interface FocusState {
+    mode: "idle" | "drafting" | "watching";
+    activeBucket: string;
+    artifactRef: string;
+    startedAt: string;
+}
+export declare function writeFocus(workspacePath: string, focus: FocusState): void;
+export declare function readFocus(workspacePath: string): FocusState | null;
+export declare function writePause(workspacePath: string, expiry: string): void;
+export declare function readPause(workspacePath: string): string | null;
+export declare function clearPause(workspacePath: string): boolean;
+export interface Hold {
+    path: string;
+    persistent: boolean;
+}
+export declare function addHold(workspacePath: string, holdPath: string, persistent: boolean): void;
+export declare function listHolds(workspacePath: string): Hold[];
+export declare function removeHold(workspacePath: string, holdPath: string): boolean;
+export declare function appendDailyNote(workspacePath: string, date: string, entry: string): void;
+export declare function readDailyNote(workspacePath: string, date: string): string;
+export declare function scaffoldRuntimeAgentsMd(workspacePath: string): boolean;
+export declare function updateLastActivity(vaultPath: string, canonical: string, timestamp: string): void;

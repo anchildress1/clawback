@@ -1,13 +1,18 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { Type } from "@sinclair/typebox";
-import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, statSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import {
-  validateSlug, assertWithinBase, getVaultPath,
-  matter, stringifyMatter,
+  validateSlug, assertWithinBase, getVaultPath, getWorkspacePath,
+  stringifyMatter,
   readBucketManifest, writeCapture, writeInbox, autoDiscoverBuckets,
-  addAlias, moveLastCapture, promoteFutureMe,
-  writeWatcher, readWatcher, writeDraft, writeConflicts, readConflicts, updateLastCommit,
+  addAlias, moveLastCapture, promoteFutureMe, writeFutureMe, updateLastActivity,
+  appendTriageLog, readTriageLog,
+  writeFocus, readFocus,
+  writePause, readPause, clearPause,
+  addHold, removeHold, listHolds,
+  appendDailyNote, readDailyNote,
+  scaffoldRuntimeAgentsMd,
 } from "./vault.js";
 
 export default definePluginEntry({
@@ -22,8 +27,8 @@ export default definePluginEntry({
       name: "clawback_read_manifest",
       label: "Read Bucket Manifest",
       description:
-        "Read all bucket metadata from the vault. Returns slug, description, aliases, state, " +
-        "last-commit timestamp, configured repos, and 3 most recent captures per bucket. " +
+        "Read all bucket metadata from the vault. Returns canonical name, aliases, git_repo, " +
+        "vault_refs, last_activity, and 3 most recent captures per bucket. " +
         "Use this before routing a capture to see what buckets exist.",
       parameters: Type.Object({}),
       async execute() {
@@ -44,21 +49,21 @@ export default definePluginEntry({
       label: "Write Capture",
       description:
         "Write a capture to a specific bucket's captures.md file in the vault. " +
-        "Use after routing decides the destination bucket. Pass the bucket slug and capture text.",
+        "Use after routing decides the destination bucket. Pass the bucket canonical name and capture text.",
       parameters: Type.Object({
-        slug: Type.String({ description: "Bucket slug (folder name)" }),
+        canonical: Type.String({ description: "Bucket canonical name (folder name)" }),
         text: Type.String({ description: "The capture text to write" }),
       }),
       async execute(_toolCallId, params) {
-        const { slug, text } = params as { slug: string; text: string };
+        const { canonical, text } = params as { canonical: string; text: string };
         const vaultPath = getVaultPath(api.pluginConfig);
         const timestamp = new Date().toISOString();
-        writeCapture(vaultPath, slug, text, timestamp);
+        writeCapture(vaultPath, canonical, text, timestamp);
         return {
           content: [
-            { type: "text" as const, text: `Capture written to ${slug}/captures.md` },
+            { type: "text" as const, text: `Capture written to ${canonical}/captures.md` },
           ],
-          details: { slug, timestamp },
+          details: { canonical, timestamp },
         };
       },
     });
@@ -90,46 +95,41 @@ export default definePluginEntry({
       name: "clawback_scaffold_bucket",
       label: "Scaffold Bucket",
       description:
-        "Create a new bucket folder in the vault with _bucket.md, captures.md, memory.md, " +
-        "and future-me.md. Use when routing discovers a new project or promoting from future-me.",
+        "Create a new bucket folder in the vault with _bucket.md, captures.md, and memory.md. " +
+        "Use when triage discovers a new project or promoting from future-me.",
       parameters: Type.Object({
-        slug: Type.String({
-          description: "Bucket slug (folder name, lowercase, hyphens)",
+        canonical: Type.String({
+          description: "Bucket canonical name (folder name, lowercase, hyphens)",
         }),
-        description: Type.String({ description: "One-line bucket description" }),
       }),
       async execute(_toolCallId, params) {
-        const { slug, description } = params as { slug: string; description: string };
-        validateSlug(slug);
+        const { canonical } = params as { canonical: string };
+        validateSlug(canonical);
         const vaultPath = getVaultPath(api.pluginConfig);
         const bucketsBase = join(vaultPath, "OpenClaw", "buckets");
-        const bucketDir = join(bucketsBase, slug);
+        const bucketDir = join(bucketsBase, canonical);
         assertWithinBase(bucketsBase, bucketDir);
         if (existsSync(bucketDir)) {
           return {
             content: [
-              { type: "text" as const, text: `Bucket ${slug} already exists.` },
+              { type: "text" as const, text: `Bucket ${canonical} already exists.` },
             ],
             details: { created: false },
           };
         }
         mkdirSync(bucketDir, { recursive: true });
         const bucketMd = stringifyMatter(
-          { slug, description, aliases: [], state: "active", "last-commit": "", repos: [] },
-          `\n# ${slug}\n\n${description}\n`,
+          { canonical, aliases: [], git_repo: "", vault_refs: [], last_activity: "" },
+          `\n# ${canonical}\n`,
         );
         writeFileSync(join(bucketDir, "_bucket.md"), bucketMd);
-        writeFileSync(join(bucketDir, "captures.md"), `# Captures — ${slug}\n`);
-        writeFileSync(join(bucketDir, "memory.md"), `# Memory — ${slug}\n`);
-        writeFileSync(
-          join(bucketDir, "future-me.md"),
-          `# Future Me — ${slug}\n\nTangent captures parked here for later.\n`,
-        );
+        writeFileSync(join(bucketDir, "captures.md"), `# Captures — ${canonical}\n`);
+        writeFileSync(join(bucketDir, "memory.md"), `# Memory — ${canonical}\n`);
         return {
           content: [
-            { type: "text" as const, text: `Bucket ${slug} scaffolded.` },
+            { type: "text" as const, text: `Bucket ${canonical} scaffolded.` },
           ],
-          details: { created: true, slug },
+          details: { created: true, canonical },
         };
       },
     });
@@ -139,7 +139,7 @@ export default definePluginEntry({
       name: "clawback_status",
       label: "Bucket Status",
       description:
-        "Get a summary of all buckets — name, state, capture count, days idle. " +
+        "Get a summary of all buckets — name, capture count, last activity age. " +
         "Use when the user asks for status, overview, or 'how are things'.",
       parameters: Type.Object({}),
       async execute() {
@@ -156,26 +156,19 @@ export default definePluginEntry({
             details: { bucketCount: 0 },
           };
         }
-        const stateEmoji: Record<string, string> = {
-          active: "🟢",
-          submitted: "📤",
-          monitoring: "👁️",
-          archived: "📦",
-        };
         const now = Date.now();
         const bucketLines = manifest.map((b) => {
-          const emoji = stateEmoji[b.state] || "❓";
-          const capturesFile = join(vaultPath, "OpenClaw", "buckets", b.slug, "captures.md");
+          const capturesFile = join(vaultPath, "OpenClaw", "buckets", b.canonical, "captures.md");
           const totalCaptures = existsSync(capturesFile)
             ? readFileSync(capturesFile, "utf-8").split("\n---\n").filter((chunk) => chunk.includes("**")).length
             : 0;
-          const lastCaptureStat = existsSync(capturesFile) ? statSync(capturesFile).mtimeMs : 0;
-          const daysIdle = lastCaptureStat > 0 ? Math.floor((now - lastCaptureStat) / 86_400_000) : -1;
+          const lastAct = b.lastActivity ? new Date(b.lastActivity).getTime() : 0;
+          const daysIdle = lastAct > 0 ? Math.floor((now - lastAct) / 86_400_000) : -1;
           let idleStr: string;
-          if (daysIdle < 0) idleStr = "no captures";
+          if (daysIdle < 0) idleStr = "no activity";
           else if (daysIdle === 0) idleStr = "today";
           else idleStr = `${daysIdle}d idle`;
-          return { line: `${emoji} **${b.slug}** [${b.state}] — ${totalCaptures} captures, ${idleStr}`, daysIdle };
+          return { line: `**${b.canonical}** — ${totalCaptures} captures, ${idleStr}`, daysIdle };
         });
         bucketLines.sort((a, b) => b.daysIdle - a.daysIdle);
         const lines = bucketLines.map((b) => b.line);
@@ -195,15 +188,15 @@ export default definePluginEntry({
         "pass the full new content, not a diff. The old file is completely replaced. " +
         "Use after extracting project state from a new capture.",
       parameters: Type.Object({
-        slug: Type.String({ description: "Bucket slug" }),
+        canonical: Type.String({ description: "Bucket canonical name" }),
         content: Type.String({ description: "Full new memory.md content (replaces everything)" }),
       }),
       async execute(_toolCallId, params) {
-        const { slug, content } = params as { slug: string; content: string };
-        validateSlug(slug);
+        const { canonical, content } = params as { canonical: string; content: string };
+        validateSlug(canonical);
         const vaultPath = getVaultPath(api.pluginConfig);
         const bucketsBase = join(vaultPath, "OpenClaw", "buckets");
-        const bucketDir = join(bucketsBase, slug);
+        const bucketDir = join(bucketsBase, canonical);
         assertWithinBase(bucketsBase, bucketDir);
         if (!existsSync(bucketDir)) {
           mkdirSync(bucketDir, { recursive: true });
@@ -211,8 +204,8 @@ export default definePluginEntry({
         const memoryFile = join(bucketDir, "memory.md");
         writeFileSync(memoryFile, content);
         return {
-          content: [{ type: "text" as const, text: `Memory updated for ${slug}.` }],
-          details: { slug },
+          content: [{ type: "text" as const, text: `Memory updated for ${canonical}.` }],
+          details: { canonical },
         };
       },
     });
@@ -248,32 +241,32 @@ export default definePluginEntry({
         "Read any file from a bucket folder — memory.md, captures.md, future-me.md, or _bucket.md. " +
         "Use when answering questions or before writing memory updates (to see current state).",
       parameters: Type.Object({
-        slug: Type.String({ description: "Bucket slug" }),
+        canonical: Type.String({ description: "Bucket canonical name" }),
         filename: Type.String({
-          description: "File to read: memory.md, captures.md, future-me.md, or _bucket.md",
+          description: "File to read: memory.md, captures.md, or _bucket.md",
         }),
       }),
       async execute(_toolCallId, params) {
-        const { slug, filename } = params as { slug: string; filename: string };
-        validateSlug(slug);
-        const allowed = ["memory.md", "captures.md", "future-me.md", "_bucket.md"];
+        const { canonical, filename } = params as { canonical: string; filename: string };
+        validateSlug(canonical);
+        const allowed = ["memory.md", "captures.md", "_bucket.md"];
         if (!allowed.includes(filename)) {
           throw new Error(`Cannot read "${filename}". Allowed: ${allowed.join(", ")}`);
         }
         const vaultPath = getVaultPath(api.pluginConfig);
         const bucketsBase = join(vaultPath, "OpenClaw", "buckets");
-        const filePath = join(bucketsBase, slug, filename);
+        const filePath = join(bucketsBase, canonical, filename);
         assertWithinBase(bucketsBase, filePath);
         if (!existsSync(filePath)) {
           return {
-            content: [{ type: "text" as const, text: `File not found: ${slug}/${filename}` }],
+            content: [{ type: "text" as const, text: `File not found: ${canonical}/${filename}` }],
             details: { found: false },
           };
         }
         const text = readFileSync(filePath, "utf-8");
         return {
           content: [{ type: "text" as const, text }],
-          details: { found: true, slug, filename },
+          details: { found: true, canonical, filename },
         };
       },
     });
@@ -308,74 +301,22 @@ export default definePluginEntry({
       name: "clawback_add_alias",
       label: "Add Bucket Alias",
       description:
-        "Add a routing alias to a bucket's _bucket.md frontmatter. Use after a ❌ correction " +
+        "Add a routing alias to a bucket's _bucket.md frontmatter. Use after a text correction " +
         "so the router learns from mistakes. The alias is the original message text that was misrouted.",
       parameters: Type.Object({
-        slug: Type.String({ description: "Bucket slug to add the alias to" }),
+        canonical: Type.String({ description: "Bucket canonical name to add the alias to" }),
         alias: Type.String({ description: "Alias text to add" }),
       }),
       async execute(_toolCallId, params) {
-        const { slug, alias } = params as { slug: string; alias: string };
+        const { canonical, alias } = params as { canonical: string; alias: string };
         const vaultPath = getVaultPath(api.pluginConfig);
-        const result = addAlias(vaultPath, slug, alias);
+        const result = addAlias(vaultPath, canonical, alias);
         return {
           content: [{
             type: "text" as const,
-            text: result.added ? `Alias added to ${slug}.` : `Alias already exists on ${slug}.`,
+            text: result.added ? `Alias added to ${canonical}.` : `Alias already exists on ${canonical}.`,
           }],
           details: { added: result.added, alias: result.normalized },
-        };
-      },
-    });
-
-    // --- Tool: Update bucket state ---
-    api.registerTool({
-      name: "clawback_update_bucket_state",
-      label: "Update Bucket State",
-      description:
-        "Transition a bucket's lifecycle state in _bucket.md frontmatter. " +
-        "Valid transitions: active→submitted, submitted→monitoring, monitoring→archived.",
-      parameters: Type.Object({
-        slug: Type.String({ description: "Bucket slug" }),
-        newState: Type.String({
-          description: "Target state: submitted, monitoring, or archived",
-        }),
-      }),
-      async execute(_toolCallId, params) {
-        const { slug, newState } = params as { slug: string; newState: string };
-        validateSlug(slug);
-        const validStates = ["active", "submitted", "monitoring", "archived"];
-        if (!validStates.includes(newState)) {
-          throw new Error(`Invalid state "${newState}". Valid: ${validStates.join(", ")}`);
-        }
-        const transitions: Record<string, string[]> = {
-          active: ["submitted"],
-          submitted: ["monitoring"],
-          monitoring: ["archived"],
-          archived: [],
-        };
-        const vaultPath = getVaultPath(api.pluginConfig);
-        const bucketsBase = join(vaultPath, "OpenClaw", "buckets");
-        const bucketFile = join(bucketsBase, slug, "_bucket.md");
-        assertWithinBase(bucketsBase, bucketFile);
-        if (!existsSync(bucketFile)) {
-          throw new Error(`Bucket ${slug} does not exist.`);
-        }
-        const { data: fm, content: body } = matter(readFileSync(bucketFile, "utf-8"));
-        const allowed = transitions[fm.state] ?? [];
-        if (!allowed.includes(newState)) {
-          throw new Error(
-            `Cannot transition ${slug} from "${fm.state}" to "${newState}". ` +
-            `Allowed: ${allowed.length > 0 ? allowed.join(", ") : "none (terminal state)"}.`,
-          );
-        }
-        fm.state = newState;
-        writeFileSync(bucketFile, stringifyMatter(fm, body));
-        return {
-          content: [
-            { type: "text" as const, text: `${slug} → ${newState}.` },
-          ],
-          details: { slug, previousState: fm.state, newState },
         };
       },
     });
@@ -385,61 +326,44 @@ export default definePluginEntry({
       name: "clawback_move_last_capture",
       label: "Move Last Capture",
       description:
-        "Move the most recent capture from one bucket to another. Use for ❌-correction or " +
-        "'/move last to <slug>' command. Also adds an alias on the destination bucket so the " +
-        "router learns from the correction.",
+        "Move the most recent capture from one bucket to another. Use for text-based correction " +
+        "('no, wrong bucket') or '/move last to <name>' command.",
       parameters: Type.Object({
-        fromSlug: Type.String({ description: "Source bucket slug" }),
-        toSlug: Type.String({ description: "Destination bucket slug" }),
+        from: Type.String({ description: "Source bucket canonical name" }),
+        to: Type.String({ description: "Destination bucket canonical name" }),
       }),
       async execute(_toolCallId, params) {
-        const { fromSlug, toSlug } = params as { fromSlug: string; toSlug: string };
+        const { from, to } = params as { from: string; to: string };
         const vaultPath = getVaultPath(api.pluginConfig);
-        const result = moveLastCapture(vaultPath, fromSlug, toSlug);
+        const result = moveLastCapture(vaultPath, from, to);
         return {
           content: [
-            { type: "text" as const, text: `Moved to ${toSlug}. Alias learned.` },
+            { type: "text" as const, text: `Moved to ${to}. Alias learned.` },
           ],
-          details: { fromSlug, toSlug, captureText: result.captureText },
+          details: { from, to, captureText: result.captureText },
         };
       },
     });
 
-    // --- Tool: Write to future-me sidecar ---
+    // --- Tool: Write to future-me (flat file at vault root) ---
     api.registerTool({
       name: "clawback_write_future_me",
       label: "Write Future-Me",
       description:
-        "Write a capture to a bucket's future-me.md when the capture mentions a non-foreground " +
-        "bucket. Keeps the user in their current flow without switching context.",
+        "Park a tangent capture in vault-root future-me.md. Use when the capture mentions a " +
+        "non-foreground bucket. Keeps the user in their current flow without switching context.",
       parameters: Type.Object({
-        slug: Type.String({ description: "Bucket slug for the tangent topic" }),
         text: Type.String({ description: "The capture text" }),
+        bucketHint: Type.String({ description: "Which bucket this tangent relates to" }),
       }),
       async execute(_toolCallId, params) {
-        const { slug, text } = params as { slug: string; text: string };
-        validateSlug(slug);
+        const { text, bucketHint } = params as { text: string; bucketHint: string };
         const vaultPath = getVaultPath(api.pluginConfig);
-        const bucketsBase = join(vaultPath, "OpenClaw", "buckets");
-        const bucketDir = join(bucketsBase, slug);
-        assertWithinBase(bucketsBase, bucketDir);
-        if (!existsSync(bucketDir)) {
-          mkdirSync(bucketDir, { recursive: true });
-        }
-        const futureFile = join(bucketDir, "future-me.md");
         const timestamp = new Date().toISOString();
-        const entry = `\n---\n**${timestamp}**\n${text}\n`;
-        if (existsSync(futureFile)) {
-          appendFileSync(futureFile, entry);
-        } else {
-          writeFileSync(
-            futureFile,
-            `# Future Me — ${slug}\n\nTangent captures parked here for later.\n${entry}`,
-          );
-        }
+        writeFutureMe(vaultPath, text, bucketHint, timestamp);
         return {
-          content: [{ type: "text" as const, text: `Parked in ${slug}/future-me.md.` }],
-          details: { slug, timestamp },
+          content: [{ type: "text" as const, text: `Parked in future-me.md [${bucketHint}].` }],
+          details: { bucketHint, timestamp },
         };
       },
     });
@@ -449,169 +373,329 @@ export default definePluginEntry({
       name: "clawback_promote_future_me",
       label: "Promote Future-Me Entry",
       description:
-        "Promote the most recent entry from a bucket's future-me.md into a new bucket. " +
+        "Promote the most recent entry from vault-root future-me.md into a new bucket. " +
         "Scaffolds the new bucket, moves the entry to its captures.md, and removes it from " +
-        "the source future-me.md. Use on 🎯 reaction or /promote command.",
+        "future-me.md. Use on /promote command.",
       parameters: Type.Object({
-        sourceSlug: Type.String({ description: "Bucket slug where the future-me entry lives" }),
-        newSlug: Type.String({ description: "Slug for the new bucket to create" }),
-        description: Type.String({ description: "One-line description for the new bucket" }),
+        newCanonical: Type.String({ description: "Canonical name for the new bucket to create" }),
       }),
       async execute(_toolCallId, params) {
-        const { sourceSlug, newSlug, description } = params as {
-          sourceSlug: string; newSlug: string; description: string;
-        };
+        const { newCanonical } = params as { newCanonical: string };
         const vaultPath = getVaultPath(api.pluginConfig);
-        const result = promoteFutureMe(vaultPath, sourceSlug, newSlug, description);
+        const result = promoteFutureMe(vaultPath, newCanonical);
         return {
           content: [
-            { type: "text" as const, text: `Promoted to ${newSlug}. 🎯` },
+            { type: "text" as const, text: `Promoted to ${newCanonical}.` },
           ],
-          details: { sourceSlug, newSlug, captureText: result.captureText },
+          details: { newCanonical, captureText: result.captureText },
         };
       },
     });
 
-    // --- Tool: Write watcher alert ---
+    // --- Tool: Update last activity timestamp ---
     api.registerTool({
-      name: "clawback_write_watcher",
-      label: "Write Watcher Alert",
+      name: "clawback_update_last_activity",
+      label: "Update Last Activity",
       description:
-        "Append an alert entry to a watcher file (pr-alerts.md or dev-comments.md) in the " +
-        "vault's watchers/ directory. Use from pr-watcher and dev-watcher scheduled jobs.",
+        "Update a bucket's last_activity timestamp in _bucket.md frontmatter. " +
+        "Called automatically on capture writes; also usable from dispatcher jobs.",
       parameters: Type.Object({
-        filename: Type.String({ description: "Watcher file: pr-alerts.md or dev-comments.md" }),
-        entry: Type.String({ description: "Markdown entry to append (include timestamp, details)" }),
+        canonical: Type.String({ description: "Bucket canonical name" }),
+        timestamp: Type.String({ description: "ISO timestamp of the activity" }),
       }),
       async execute(_toolCallId, params) {
-        const { filename, entry } = params as { filename: string; entry: string };
+        const { canonical, timestamp } = params as { canonical: string; timestamp: string };
         const vaultPath = getVaultPath(api.pluginConfig);
-        writeWatcher(vaultPath, filename, entry);
+        updateLastActivity(vaultPath, canonical, timestamp);
         return {
-          content: [{ type: "text" as const, text: `Alert written to watchers/${filename}` }],
-          details: { filename },
+          content: [{ type: "text" as const, text: `${canonical} last_activity → ${timestamp}` }],
+          details: { canonical, timestamp },
         };
       },
     });
 
-    // --- Tool: Read watcher alerts ---
+    // --- Tool: Append to triage log ---
     api.registerTool({
-      name: "clawback_read_watcher",
-      label: "Read Watcher Alerts",
+      name: "clawback_append_triage_log",
+      label: "Append Triage Log",
       description:
-        "Read all entries from a watcher file (pr-alerts.md or dev-comments.md). " +
-        "Use from the surface skill to evaluate alerting rules.",
+        "Log a triage decision. Every capture/route/correction gets a row. " +
+        "Feeds pattern-review and enables reversal.",
       parameters: Type.Object({
-        filename: Type.String({ description: "Watcher file: pr-alerts.md or dev-comments.md" }),
+        raw: Type.String({ description: "Original message text" }),
+        classification: Type.String({ description: "capture, command, question, or correction" }),
+        target: Type.String({ description: "Target file or bucket" }),
+        action: Type.String({ description: "What was done (wrote, routed, moved, asked)" }),
       }),
       async execute(_toolCallId, params) {
-        const { filename } = params as { filename: string };
-        const vaultPath = getVaultPath(api.pluginConfig);
-        const content = readWatcher(vaultPath, filename);
-        return {
-          content: [{ type: "text" as const, text: content || "No alerts yet." }],
-          details: { filename, empty: !content },
+        const { raw, classification, target, action } = params as {
+          raw: string; classification: string; target: string; action: string;
         };
-      },
-    });
-
-    // --- Tool: Write draft ---
-    api.registerTool({
-      name: "clawback_write_draft",
-      label: "Write Draft",
-      description:
-        "Write a generated draft to a bucket's drafts/ directory. Creates a timestamped file " +
-        "like drafts/dev-submission-2026-04-20T14-30-00.md. Use from the draft skill.",
-      parameters: Type.Object({
-        slug: Type.String({ description: "Bucket slug" }),
-        templateName: Type.String({ description: "Template name (e.g., dev-submission)" }),
-        content: Type.String({ description: "Full draft content in markdown" }),
-      }),
-      async execute(_toolCallId, params) {
-        const { slug, templateName, content } = params as {
-          slug: string; templateName: string; content: string;
-        };
-        const vaultPath = getVaultPath(api.pluginConfig);
-        const filename = writeDraft(vaultPath, slug, templateName, content);
+        const workspacePath = getWorkspacePath(api.pluginConfig);
+        appendTriageLog(workspacePath, {
+          timestamp: new Date().toISOString(),
+          raw, classification, target, action,
+        });
         return {
-          content: [{ type: "text" as const, text: `Draft written: ${slug}/drafts/${filename}` }],
-          details: { slug, filename },
-        };
-      },
-    });
-
-    // --- Tool: Write conflicts ---
-    api.registerTool({
-      name: "clawback_write_conflicts",
-      label: "Write Conflicts",
-      description:
-        "Replace _conflicts.md at the vault root with updated conflict entries. Use during " +
-        "the memory consolidation pass when contradictions are found that cannot be auto-resolved.",
-      parameters: Type.Object({
-        content: Type.String({ description: "Full new _conflicts.md content (replaces everything)" }),
-      }),
-      async execute(_toolCallId, params) {
-        const { content } = params as { content: string };
-        const vaultPath = getVaultPath(api.pluginConfig);
-        writeConflicts(vaultPath, content);
-        return {
-          content: [{ type: "text" as const, text: "Conflicts file updated." }],
+          content: [{ type: "text" as const, text: "Triage decision logged." }],
           details: {},
         };
       },
     });
 
-    // --- Tool: Read conflicts ---
+    // --- Tool: Read triage log ---
     api.registerTool({
-      name: "clawback_read_conflicts",
-      label: "Read Conflicts",
+      name: "clawback_read_triage_log",
+      label: "Read Triage Log",
       description:
-        "Read _conflicts.md from the vault root. Use during the consolidation pass to see " +
-        "existing unresolved conflicts before writing updates.",
+        "Read the full triage log. Use to find prior writes for correction, " +
+        "or from pattern-review to analyze routing patterns.",
       parameters: Type.Object({}),
       async execute() {
-        const vaultPath = getVaultPath(api.pluginConfig);
-        const content = readConflicts(vaultPath);
+        const workspacePath = getWorkspacePath(api.pluginConfig);
+        const content = readTriageLog(workspacePath);
         return {
-          content: [{ type: "text" as const, text: content || "No conflicts." }],
+          content: [{ type: "text" as const, text: content || "No triage log entries yet." }],
           details: { empty: !content },
         };
       },
     });
 
-    // --- Tool: Update last commit timestamp ---
+    // --- Tool: Write focus ---
     api.registerTool({
-      name: "clawback_update_last_commit",
-      label: "Update Last Commit",
+      name: "clawback_write_focus",
+      label: "Write Focus",
       description:
-        "Update a bucket's last-commit timestamp in _bucket.md frontmatter. Use from " +
-        "pr-watcher after checking the user's latest commit on repos tied to the bucket.",
+        "Set the agent's current focus state. Mode (idle/drafting/watching), active bucket, " +
+        "artifact ref, start timestamp. Decays to idle after 8.25 min silence.",
       parameters: Type.Object({
-        slug: Type.String({ description: "Bucket slug" }),
-        timestamp: Type.String({ description: "ISO timestamp of the last commit" }),
+        mode: Type.String({ description: "idle, drafting, or watching" }),
+        activeBucket: Type.String({ description: "Canonical name of focused bucket" }),
+        artifactRef: Type.Optional(Type.String({ description: "Artifact being worked on" })),
       }),
       async execute(_toolCallId, params) {
-        const { slug, timestamp } = params as { slug: string; timestamp: string };
-        const vaultPath = getVaultPath(api.pluginConfig);
-        updateLastCommit(vaultPath, slug, timestamp);
+        const { mode, activeBucket, artifactRef } = params as {
+          mode: string; activeBucket: string; artifactRef?: string;
+        };
+        const workspacePath = getWorkspacePath(api.pluginConfig);
+        writeFocus(workspacePath, {
+          mode: mode as "idle" | "drafting" | "watching",
+          activeBucket,
+          artifactRef: artifactRef || "",
+          startedAt: new Date().toISOString(),
+        });
         return {
-          content: [{ type: "text" as const, text: `${slug} last-commit → ${timestamp}` }],
-          details: { slug, timestamp },
+          content: [{ type: "text" as const, text: `Focus → ${mode} on ${activeBucket}` }],
+          details: { mode, activeBucket },
         };
       },
     });
 
-    // --- Boot: auto-discover + log manifest on start ---
+    // --- Tool: Read focus ---
+    api.registerTool({
+      name: "clawback_read_focus",
+      label: "Read Focus",
+      description: "Read the current focus state (mode, active bucket, start time).",
+      parameters: Type.Object({}),
+      async execute() {
+        const workspacePath = getWorkspacePath(api.pluginConfig);
+        const focus = readFocus(workspacePath);
+        if (!focus) {
+          return {
+            content: [{ type: "text" as const, text: "No focus set (idle)." }],
+            details: { mode: "idle" },
+          };
+        }
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify(focus, null, 2) }],
+          details: { ...focus },
+        };
+      },
+    });
+
+    // --- Tool: Write pause ---
+    api.registerTool({
+      name: "clawback_write_pause",
+      label: "Write Pause",
+      description:
+        "Pause the agent. Dispatcher and agent check pause.md before any unsolicited message. " +
+        "User resumes with 'ok'.",
+      parameters: Type.Object({
+        expiry: Type.String({ description: "ISO timestamp when pause expires" }),
+      }),
+      async execute(_toolCallId, params) {
+        const { expiry } = params as { expiry: string };
+        const workspacePath = getWorkspacePath(api.pluginConfig);
+        writePause(workspacePath, expiry);
+        return {
+          content: [{ type: "text" as const, text: "Paused." }],
+          details: { expiry },
+        };
+      },
+    });
+
+    // --- Tool: Read pause ---
+    api.registerTool({
+      name: "clawback_read_pause",
+      label: "Read Pause",
+      description: "Check if the agent is paused and when the pause expires.",
+      parameters: Type.Object({}),
+      async execute() {
+        const workspacePath = getWorkspacePath(api.pluginConfig);
+        const expiry = readPause(workspacePath);
+        if (!expiry) {
+          return {
+            content: [{ type: "text" as const, text: "Not paused." }],
+            details: { paused: false },
+          };
+        }
+        return {
+          content: [{ type: "text" as const, text: `Paused until ${expiry}` }],
+          details: { paused: true, expiry },
+        };
+      },
+    });
+
+    // --- Tool: Clear pause ---
+    api.registerTool({
+      name: "clawback_clear_pause",
+      label: "Clear Pause",
+      description: "Resume the agent by clearing pause.md. Use when user says 'ok'.",
+      parameters: Type.Object({}),
+      async execute() {
+        const workspacePath = getWorkspacePath(api.pluginConfig);
+        const cleared = clearPause(workspacePath);
+        return {
+          content: [{ type: "text" as const, text: cleared ? "Resumed." : "Was not paused." }],
+          details: { cleared },
+        };
+      },
+    });
+
+    // --- Tool: Add hold ---
+    api.registerTool({
+      name: "clawback_add_hold",
+      label: "Add Hold",
+      description:
+        "Mark a path the agent must not touch. Ephemeral (session) by default; " +
+        "persistent if user says 'remember that'.",
+      parameters: Type.Object({
+        path: Type.String({ description: "File or directory path to hold" }),
+        persistent: Type.Optional(Type.Boolean({ description: "True to persist across sessions" })),
+      }),
+      async execute(_toolCallId, params) {
+        const { path, persistent } = params as { path: string; persistent?: boolean };
+        const workspacePath = getWorkspacePath(api.pluginConfig);
+        addHold(workspacePath, path, persistent ?? false);
+        return {
+          content: [{ type: "text" as const, text: `Hold added: ${path}${persistent ? " (persistent)" : ""}` }],
+          details: { path, persistent: persistent ?? false },
+        };
+      },
+    });
+
+    // --- Tool: Remove hold ---
+    api.registerTool({
+      name: "clawback_remove_hold",
+      label: "Remove Hold",
+      description: "Remove a hold on a path, allowing the agent to touch it again.",
+      parameters: Type.Object({
+        path: Type.String({ description: "File or directory path to unhold" }),
+      }),
+      async execute(_toolCallId, params) {
+        const { path } = params as { path: string };
+        const workspacePath = getWorkspacePath(api.pluginConfig);
+        const removed = removeHold(workspacePath, path);
+        return {
+          content: [{ type: "text" as const, text: removed ? `Hold removed: ${path}` : `No hold on ${path}` }],
+          details: { removed },
+        };
+      },
+    });
+
+    // --- Tool: List holds ---
+    api.registerTool({
+      name: "clawback_list_holds",
+      label: "List Holds",
+      description: "List all active holds (paths the agent must not touch).",
+      parameters: Type.Object({}),
+      async execute() {
+        const workspacePath = getWorkspacePath(api.pluginConfig);
+        const holds = listHolds(workspacePath);
+        if (holds.length === 0) {
+          return {
+            content: [{ type: "text" as const, text: "No holds." }],
+            details: { count: 0 },
+          };
+        }
+        const lines = holds.map((h) => `- ${h.path}${h.persistent ? " (persistent)" : ""}`);
+        return {
+          content: [{ type: "text" as const, text: lines.join("\n") }],
+          details: { count: holds.length },
+        };
+      },
+    });
+
+    // --- Tool: Append daily note ---
+    api.registerTool({
+      name: "clawback_append_daily_note",
+      label: "Append Daily Note",
+      description:
+        "Append an entry to today's daily note (memory/YYYY-MM-DD.md). " +
+        "Focus changes and triage log entries roll in here.",
+      parameters: Type.Object({
+        entry: Type.String({ description: "Markdown content to append" }),
+        date: Type.Optional(Type.String({ description: "Date (YYYY-MM-DD). Defaults to today." })),
+      }),
+      async execute(_toolCallId, params) {
+        const { entry, date } = params as { entry: string; date?: string };
+        const workspacePath = getWorkspacePath(api.pluginConfig);
+        const d = date || new Date().toISOString().slice(0, 10);
+        appendDailyNote(workspacePath, d, entry);
+        return {
+          content: [{ type: "text" as const, text: `Appended to daily note ${d}.` }],
+          details: { date: d },
+        };
+      },
+    });
+
+    // --- Tool: Read daily note ---
+    api.registerTool({
+      name: "clawback_read_daily_note",
+      label: "Read Daily Note",
+      description: "Read a daily note by date.",
+      parameters: Type.Object({
+        date: Type.String({ description: "Date (YYYY-MM-DD)" }),
+      }),
+      async execute(_toolCallId, params) {
+        const { date } = params as { date: string };
+        const workspacePath = getWorkspacePath(api.pluginConfig);
+        const content = readDailyNote(workspacePath, date);
+        return {
+          content: [{ type: "text" as const, text: content || `No daily note for ${date}.` }],
+          details: { date, empty: !content },
+        };
+      },
+    });
+
+    // --- Boot: auto-discover + log manifest + scaffold runtime AGENTS.md ---
     api.registerHook("before_agent_start", async () => {
       const vaultPath = getVaultPath(api.pluginConfig);
+      const workspacePath = getWorkspacePath(api.pluginConfig);
+
+      // Scaffold runtime AGENTS.md if missing
+      if (scaffoldRuntimeAgentsMd(workspacePath)) {
+        api.logger.info("scaffolded runtime AGENTS.md");
+      }
+
       const discovered = autoDiscoverBuckets(vaultPath);
-      for (const slug of discovered) {
-        api.logger.info(`auto-discovered bucket: ${slug}`);
+      for (const canonical of discovered) {
+        api.logger.info(`auto-discovered bucket: ${canonical}`);
       }
       const manifest = readBucketManifest(vaultPath);
       api.logger.info(`manifest loaded: ${manifest.length} buckets.`);
       for (const b of manifest) {
-        api.logger.debug(`  ${b.slug} [${b.state}] — ${b.aliases.length} aliases`);
+        api.logger.debug(`  ${b.canonical} — ${b.aliases.length} aliases`);
       }
     }, { name: "clawback_boot" });
   },

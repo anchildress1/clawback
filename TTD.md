@@ -20,251 +20,159 @@ Drift tracker. The PRD (`openclaw-adhd-agent-prd.md`) is the source of truth. Th
 
 **Built:** Vault at `~/git_personal/clawback-vault` with `OpenClaw/buckets/` inside it. No sibling `openclaw/` workspace directory. No shared repo.
 
-**Fix:** Restructure to match PRD. Vault and openclaw workspace are siblings in one repo, not nested.
+**Status:** PARTIALLY RESOLVED. Plugin code now supports `workspacePath` config alongside `vaultPath`. All new workspace primitives (focus, pause, holds, triage-log, daily notes, runtime AGENTS.md) write to the workspace path. Actual vault repo restructuring is a runtime task outside this plugin repo.
 
 ---
 
-### 2. Skill decomposition (13 skills → 5)
+### ~~2. Skill decomposition (13 skills -> 5)~~ RESOLVED
 
-**PRD skills:**
-1. `triage` — parse inbound, classify, route to files
-2. `bucket-manage` — CRUD, aliases, rename
-3. `obsidian-sync` — vault I/O via git
-4. `dispatcher` — tick every minute, fire jobs
-5. `pattern-review` — scan triage log, propose AGENTS.md rules
-
-**Built skills (13):** capture, intent-classify, route, memory, answer, buckets, obsidian-sync, pr-watcher, dev-watcher, surface, draft, voice-template, status
-
-**Fix:** Collapse to PRD's 5. `triage` replaces capture + intent-classify + route + answer + memory. `bucket-manage` replaces buckets. `dispatcher` replaces pr-watcher + dev-watcher + surface. `pattern-review` is unbuilt. draft, voice-template, status are not v1 skills — park them.
+Skills collapsed to PRD's 5: `triage`, `bucket-manage`, `obsidian-sync`, `dispatcher` (stub), `pattern-review` (stub). Old skills moved to `skills/v2/` or deleted.
 
 ---
 
-### 3. Capture is parallel; PRD says synchronous
+### ~~3. Capture is parallel; PRD says synchronous~~ RESOLVED
 
-**PRD (Non-goals, explicit):** "Async/parallel capture orchestration (v1 capture is single-pass synchronous)."
-
-**Built:** Parallel fanout (route + memory + answer concurrently). AGENTS.md and multiple skills describe the orchestrator pattern in detail.
-
-**Fix:** Revert to synchronous single-pass triage. Parallel is v2.
+Triage skill now specifies synchronous single-pass. No parallel fanout.
 
 ---
 
 ### 4. No dispatcher
 
-**PRD:** Dispatcher skill ticks every minute, reads job files from `openclaw/memory/jobs/*.md`, fires subagents per `kind`. Job files have YAML frontmatter (kind, schedule, state, on_hit, fail_count). This is the core scheduling primitive.
+**PRD:** Dispatcher skill ticks every minute, reads job files from `openclaw/memory/jobs/*.md`, fires subagents per `kind`.
 
-v1 job kinds: `poll-url-for-keyword`, `watch-github-repo-activity`, `review-future-me`, `review-patterns`.
-
-**Built:** Individual cron jobs per watcher skill. No job file format. No dispatcher loop. No `kind` subagents.
-
-**Fix:** Build the dispatcher. Job files with frontmatter. Four v1 kinds.
+**Status:** STUB. `skills/dispatcher/SKILL.md` documents the full spec. Implementation depends on OpenClaw cron infrastructure. No tool code yet.
 
 ---
 
-### 5. AGENTS.md role confusion
+### ~~5. AGENTS.md role confusion~~ RESOLVED
 
-**PRD:** `openclaw/AGENTS.md` is the agent's living config loaded every session. Starts with structure only (no rules). Rules accumulate through `review-patterns` observing corrections. Co-authored by user and agent. This is the centerpiece — "the thing that makes the rest function."
-
-**Built:** AGENTS.md in the plugin repo is a developer onboarding doc for coding agents.
-
-**Fix:** These are two different files. The repo's AGENTS.md stays as dev onboarding. The runtime `openclaw/AGENTS.md` is a separate deliverable — scaffold it with structure-only content as the PRD specifies.
+Repo's `AGENTS.md` stays as dev onboarding. Runtime `openclaw/AGENTS.md` is scaffolded on first boot by `before_agent_start` hook with structure-only content per PRD.
 
 ---
 
-### 6. Bucket schema divergence
+### ~~6. Bucket schema divergence~~ RESOLVED
 
-**PRD frontmatter:**
-```yaml
-canonical: architect-of-suspicion
-aliases: [mansion]
-git_repo: github.com/user/architect-of-suspicion
-vault_refs: [projects/architect-of-suspicion/, blog/architect-of-suspicion/]
-last_activity: 2026-04-17T15:40:00Z
-```
-No lifecycle states. `last_activity` is the only temporal field. Staleness is a query filter, not a state change.
-
-**Built frontmatter:**
-```yaml
-slug: ...
-description: ...
-aliases: []
-state: active
-last-commit: ""
-repos: []
-```
-
-**Fix:** Align schema. `canonical` not `slug`. `git_repo` (singular) not `repos` (array). `vault_refs` added. `last_activity` not `last-commit`. Remove `state` field and lifecycle FSM. Remove `description` (not in PRD schema).
+Schema aligned: `canonical` (not `slug`), `git_repo` (singular, not `repos[]`), `vault_refs` added, `last_activity` (not `last-commit`), `state` removed, `description` removed.
 
 ---
 
-### 7. Unknown reference handling is backwards
+### ~~7. Unknown reference handling is backwards~~ RESOLVED
 
-**PRD:** "When triage encounters an unknown reference, it asks. Short question, one at a time. 'New to me — mansion. Which bucket, or is this a new one?' The user answers in one word."
-
-**Built:** "NEVER ask the user which bucket. Always default-route." (capture/SKILL.md, route/SKILL.md, AGENTS.md)
-
-**Fix:** Implement the PRD's ask-on-unknown behavior. Silent routing is for known references only.
+Triage skill now specifies ask-on-unknown: "New to me -- <reference>. Which bucket, or is this a new one?"
 
 ---
 
 ## Significant — behavior doesn't match
 
-### 8. No focus model
+### ~~8. No focus model~~ RESOLVED
 
-**PRD:** `openclaw/focus.md` — mode (idle/drafting/watching), active bucket, artifact ref, start timestamp. Decays to idle after 8.25 min silence. Prior focus tails into daily note.
-
-**Built:** Nothing.
-
-**Fix:** Implement focus.md write/read in triage flow. Add decay logic to dispatcher.
+`focus.md` write/read implemented. Tools: `clawback_write_focus`, `clawback_read_focus`. Decay logic is a dispatcher concern (deferred).
 
 ---
 
-### 9. No pause model
+### ~~9. No pause model~~ RESOLVED
 
-**PRD:** `openclaw/pause.md` with expiry. Dispatcher and agent check before any unsolicited message. "paused" / "ok" cycle. "Pause is the fix-mechanism when the agent is fucking up."
-
-**Built:** Nothing.
-
-**Fix:** Implement pause.md. Dispatcher checks before firing. Main agent checks before non-reply DMs.
+`pause.md` with expiry implemented. Tools: `clawback_write_pause`, `clawback_read_pause`, `clawback_clear_pause`.
 
 ---
 
-### 10. No holds model
+### ~~10. No holds model~~ RESOLVED
 
-**PRD:** "Leave journal.md alone" → agent holds that path for the session. Ephemeral unless user says "remember that."
-
-**Built:** Nothing.
-
-**Fix:** Implement ephemeral holds with optional persistence to MEMORY.md.
+Ephemeral and persistent holds implemented. Tools: `clawback_add_hold`, `clawback_remove_hold`, `clawback_list_holds`.
 
 ---
 
-### 11. No triage log
+### ~~11. No triage log~~ RESOLVED
 
-**PRD:** `triage-log.md` — every decision logged with raw message, classification, target file, action taken. Enables reversal and feeds pattern-review.
-
-**Built:** Nothing. Decisions are fire-and-forget.
-
-**Fix:** Implement triage-log.md. Every triage decision gets a row. Rolls into daily notes.
+`triage-log.md` implemented. Tools: `clawback_append_triage_log`, `clawback_read_triage_log`. Every triage decision gets a row.
 
 ---
 
 ### 12. No pattern-review / learning loop
 
-**PRD:** Daily `review-patterns` job scans triage log and corrections, proposes AGENTS.md rule additions, soft-confirms with user. "The agent never stops being ask-heavy if review-patterns doesn't run." Instrumented from day one.
+**PRD:** Daily `review-patterns` job scans triage log and corrections, proposes AGENTS.md rule additions.
 
-**Built:** Nothing. No learning mechanism exists.
-
-**Fix:** Build as a dispatcher job kind. This is the most important unbuilt feature — without it, the agent never gets smarter.
+**Status:** STUB. `skills/pattern-review/SKILL.md` documents the full spec. Implementation depends on dispatcher + triage log accumulation.
 
 ---
 
-### 13. Future-me is per-bucket; PRD says flat file
+### ~~13. Future-me is per-bucket; PRD says flat file~~ RESOLVED
 
-**PRD:** One flat file at `vault/future-me.md` — timestamped, bucket-hinted entries. "No per-bucket split; one flat file."
-
-**Built:** Per-bucket `future-me.md` files inside each bucket folder. Tool `clawback_write_future_me` writes to bucket-specific files.
-
-**Fix:** Single flat file at vault root. Update tool and skill.
+Single flat `future-me.md` at vault root with bucket hints. `writeFutureMe()` and `promoteFutureMe()` updated.
 
 ---
 
-### 14. Correction is emoji; PRD says text
+### ~~14. Correction is emoji; PRD says text~~ RESOLVED
 
-**PRD:** "Correction is text in chat — not emoji, not a UI affordance." User says "no, wrong bucket" in chat. Agent finds prior write via triage log.
-
-**Built:** ❌ emoji reaction triggers correction. 🎯 reaction triggers promotion. Skills and tools built around reaction events.
-
-**Fix:** Replace emoji-based correction with text-based. Triage log enables finding the prior write. Emoji handling can stay as a convenience but text must be primary.
+Triage skill specifies text-based correction. All emoji reaction references removed from active code and skills.
 
 ---
 
-### 15. No daily notes
+### ~~15. No daily notes~~ RESOLVED
 
-**PRD:** `openclaw/memory/YYYY-MM-DD.md` — prior focus states and triage log entries roll into daily notes.
-
-**Built:** Nothing.
-
-**Fix:** Implement daily note creation. Focus changes and triage log entries append here.
+Daily note creation implemented. Tools: `clawback_append_daily_note`, `clawback_read_daily_note`. Files at `memory/YYYY-MM-DD.md`.
 
 ---
 
 ### 16. memory-wiki / active-memory plugins not referenced
 
-**PRD:** `memory-wiki` for provenance tracking and contradiction detection. `active-memory` for pre-reply context injection ("agent remembers without explicitly searching").
+**PRD:** `memory-wiki` for provenance tracking and contradiction detection. `active-memory` for pre-reply context injection.
 
-**Built:** Not configured or referenced anywhere in the plugin.
-
-**Fix:** Enable in OpenClaw config. Document dependencies. Verify they don't conflict with Clawback's memory skill.
+**Status:** DEFERRED. OpenClaw plugin configuration, not Clawback plugin code.
 
 ---
 
 ## Feature drift — exists but shouldn't (or wrong shape)
 
-### 17. Lifecycle FSM (remove)
+### ~~17. Lifecycle FSM (remove)~~ RESOLVED
 
-**Built:** `active → submitted → monitoring → archived` state machine in `_bucket.md` frontmatter. Enforced in `clawback_update_bucket_state` tool. Referenced by watchers and status.
-
-**PRD:** "No lifecycle states. `last_activity` is the only temporal field; staleness is a query filter applied at read time, not a state change."
-
-**Fix:** Remove FSM from vault.ts, index.ts, all skills. Replace with `last_activity` timestamp.
+FSM removed. `state` field removed from schema. `clawback_update_bucket_state` tool removed. `last_activity` timestamp is the only temporal field.
 
 ---
 
-### 18. draft / blog-writer skill (park)
+### ~~18. draft / blog-writer skill (park)~~ RESOLVED
 
-**Built:** Full draft skill with templates (dev-submission, blog-post, status-update) and contradiction flagging. Tool: `clawback_write_draft`.
-
-**PRD:** Not in v1 scope.
-
-**Fix:** Don't delete — move to a `v2/` directory or branch. Remove from active skills list.
+Moved to `skills/v2/draft/`. Tool `clawback_write_draft` removed. `writeDraft()` removed from vault.ts.
 
 ---
 
-### 19. voice-template skill (decide)
+### ~~19. voice-template skill (decide)~~ RESOLVED
 
-**Built:** Voice template with tone rules, ack phrasing, pushback tone.
-
-**PRD:** Not mentioned as a v1 skill.
-
-**Fix:** Decide: keep as harmless nice-to-have or park with draft. Doesn't violate the PRD, just isn't specified.
+Parked in `skills/v2/voice-template/`. Not v1, not harmful, but not active.
 
 ---
 
-### 20. status skill (park)
+### ~~20. status skill (park)~~ RESOLVED
 
-**Built:** Summary card with emoji, capture counts, idle days.
-
-**PRD:** Not a v1 skill.
-
-**Fix:** Park alongside draft.
+Parked in `skills/v2/status/`. `clawback_status` tool remains as it's useful for bucket overview.
 
 ---
 
-### 21. pr-watcher / dev-watcher / surface → dispatcher job kinds
+### ~~21. pr-watcher / dev-watcher / surface -> dispatcher job kinds~~ RESOLVED
 
-**Built:** Three separate skills with hardcoded behavior and individual cron schedules.
-
-**PRD:** These are dispatcher job kinds (`poll-url-for-keyword`, `watch-github-repo-activity`), not standalone skills. Behavior defined in job file frontmatter, not skill markdown.
-
-**Fix:** Rewrite as job kind handlers inside the dispatcher. Current skill logic informs the implementation but the shape is wrong.
+Parked in `skills/v2/`. Will become dispatcher job kind handlers when dispatcher is implemented.
 
 ---
 
-### 22. Watchers directory in vault (wrong location)
+### ~~22. Watchers directory in vault (wrong location)~~ RESOLVED
 
-**Built:** `watchers/pr-alerts.md` and `watchers/dev-comments.md` in the vault.
-
-**PRD:** Job results live in `openclaw/memory/jobs/*.md`. `on_hit` actions send DMs directly. No separate watchers directory.
-
-**Fix:** Remove watchers directory concept. Results flow through dispatcher job files.
+`writeWatcher()`, `readWatcher()`, and corresponding tools removed. No watchers directory concept in active code.
 
 ---
 
 ## Not yet assessed
 
-- [ ] `openclaw.plugin.json` configSchema alignment with PRD
-- [ ] `src/openclaw.d.ts` — types match PRD schema?
-- [ ] Test coverage (`vault.test.ts`) — tests the wrong behavior?
-- [ ] Ancillary docs: `demo-script.md`, `pitch.md`, `testing-checklist.md`, `clawhub-audit.md` — still useful?
-- [ ] `CREDITS.md` — still accurate?
+- [x] `openclaw.plugin.json` configSchema — updated: `workspacePath` added, `devToUsername` removed
+- [x] `src/openclaw.d.ts` — types still valid (generic interface, no schema-specific types)
+- [x] Test coverage (`vault.test.ts`) — tests updated for new schema, new primitives tested (48 tests)
+- [ ] Ancillary docs: `demo-script.md`, `pitch.md`, `testing-checklist.md`, `clawhub-audit.md` — review needed
+- [ ] `CREDITS.md` — verify accuracy
+
+---
+
+## Summary
+
+**Resolved:** 17 of 22 items (2, 3, 5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 17, 18, 19, 20, 21, 22)
+**Partially resolved:** 1 item (1 — directory layout plugin support done, vault restructure deferred)
+**Deferred:** 3 items (4 — dispatcher impl, 12 — pattern-review impl, 16 — plugin config)
+**Remaining:** 1 item (ancillary docs review)

@@ -18,12 +18,13 @@
       },
       "vaultPath": {
         "type": "string",
-        "description": "Absolute path to the Obsidian vault root on the VM",
+        "description": "Absolute path to the Obsidian vault root",
         "default": "~/clawback-vault"
       },
-      "devToUsername": {
+      "workspacePath": {
         "type": "string",
-        "description": "DEV.to username for watcher polling"
+        "description": "Absolute path to the openclaw workspace directory",
+        "default": "~/clawback-vault/openclaw"
       }
     }
   },
@@ -39,8 +40,8 @@
     "vaultPath": {
       "label": "Vault Path"
     },
-    "devToUsername": {
-      "label": "DEV.to Username"
+    "workspacePath": {
+      "label": "Workspace Path"
     }
   }
 }

@@ -6,6 +6,8 @@ import {
   validateSlug, assertWithinBase, getVaultPath,
   matter, stringifyMatter,
   readBucketManifest, writeCapture, writeInbox, autoDiscoverBuckets,
+  addAlias, moveLastCapture, promoteFutureMe,
+  writeWatcher, readWatcher, writeDraft, writeConflicts, readConflicts, updateLastCommit,
 } from "./vault.js";
 
 export default definePluginEntry({
@@ -26,6 +28,8 @@ export default definePluginEntry({
       parameters: Type.Object({}),
       async execute() {
         const vaultPath = getVaultPath(api.pluginConfig);
+        // Run auto-discovery on every manifest read so new folders are caught
+        autoDiscoverBuckets(vaultPath);
         const manifest = readBucketManifest(vaultPath);
         return {
           content: [{ type: "text" as const, text: JSON.stringify(manifest, null, 2) }],
@@ -312,27 +316,14 @@ export default definePluginEntry({
       }),
       async execute(_toolCallId, params) {
         const { slug, alias } = params as { slug: string; alias: string };
-        validateSlug(slug);
         const vaultPath = getVaultPath(api.pluginConfig);
-        const bucketsBase = join(vaultPath, "OpenClaw", "buckets");
-        const bucketFile = join(bucketsBase, slug, "_bucket.md");
-        assertWithinBase(bucketsBase, bucketFile);
-        if (!existsSync(bucketFile)) {
-          throw new Error(`Bucket ${slug} does not exist.`);
-        }
-        const { data: fm, content: body } = matter(readFileSync(bucketFile, "utf-8"));
-        const normalized = alias.toLowerCase().trim();
-        if (fm.aliases.includes(normalized)) {
-          return {
-            content: [{ type: "text" as const, text: `Alias already exists on ${slug}.` }],
-            details: { added: false },
-          };
-        }
-        fm.aliases.push(normalized);
-        writeFileSync(bucketFile, stringifyMatter(fm, body));
+        const result = addAlias(vaultPath, slug, alias);
         return {
-          content: [{ type: "text" as const, text: `Alias added to ${slug}.` }],
-          details: { added: true, alias: normalized },
+          content: [{
+            type: "text" as const,
+            text: result.added ? `Alias added to ${slug}.` : `Alias already exists on ${slug}.`,
+          }],
+          details: { added: result.added, alias: result.normalized },
         };
       },
     });
@@ -403,40 +394,13 @@ export default definePluginEntry({
       }),
       async execute(_toolCallId, params) {
         const { fromSlug, toSlug } = params as { fromSlug: string; toSlug: string };
-        validateSlug(fromSlug);
-        validateSlug(toSlug);
         const vaultPath = getVaultPath(api.pluginConfig);
-        const bucketsBase = join(vaultPath, "OpenClaw", "buckets");
-        const fromCapturesFile = join(bucketsBase, fromSlug, "captures.md");
-        assertWithinBase(bucketsBase, fromCapturesFile);
-
-        if (!existsSync(fromCapturesFile)) {
-          throw new Error(`No captures found in ${fromSlug}.`);
-        }
-
-        const content = readFileSync(fromCapturesFile, "utf-8");
-        const chunks = content.split("\n---\n");
-        const captureChunks = chunks.filter((chunk) => chunk.includes("**"));
-        if (captureChunks.length === 0) {
-          throw new Error(`No captures to move in ${fromSlug}.`);
-        }
-
-        const lastCapture = captureChunks[captureChunks.length - 1];
-        const lastIndex = chunks.lastIndexOf(lastCapture);
-        chunks.splice(lastIndex, 1);
-        writeFileSync(fromCapturesFile, chunks.join("\n---\n"));
-
-        const tsMatch = /\*\*(.+?)\*\*/.exec(lastCapture);
-        const timestamp = tsMatch ? tsMatch[1] : new Date().toISOString();
-        const captureText = lastCapture.replace(/\*\*.*?\*\*\n?/, "").trim();
-
-        writeCapture(vaultPath, toSlug, captureText, timestamp);
-
+        const result = moveLastCapture(vaultPath, fromSlug, toSlug);
         return {
           content: [
             { type: "text" as const, text: `Moved to ${toSlug}. Alias learned.` },
           ],
-          details: { fromSlug, toSlug, captureText },
+          details: { fromSlug, toSlug, captureText: result.captureText },
         };
       },
     });
@@ -497,61 +461,142 @@ export default definePluginEntry({
         const { sourceSlug, newSlug, description } = params as {
           sourceSlug: string; newSlug: string; description: string;
         };
-        validateSlug(sourceSlug);
-        validateSlug(newSlug);
-        if (sourceSlug === newSlug) {
-          throw new Error("Cannot promote into the same bucket.");
-        }
         const vaultPath = getVaultPath(api.pluginConfig);
-        const bucketsBase = join(vaultPath, "OpenClaw", "buckets");
-
-        // Reject if destination already exists
-        const newBucketDir = join(bucketsBase, newSlug);
-        assertWithinBase(bucketsBase, newBucketDir);
-        if (existsSync(newBucketDir)) {
-          throw new Error(`Bucket ${newSlug} already exists. Promotion creates a new bucket.`);
-        }
-
-        // Read source future-me.md
-        const futureFile = join(bucketsBase, sourceSlug, "future-me.md");
-        assertWithinBase(bucketsBase, futureFile);
-        if (!existsSync(futureFile)) {
-          throw new Error(`No future-me.md in ${sourceSlug}.`);
-        }
-        const content = readFileSync(futureFile, "utf-8");
-        const chunks = content.split("\n---\n");
-        const entryChunks = chunks.filter((chunk) => chunk.includes("**"));
-        if (entryChunks.length === 0) {
-          throw new Error(`No entries in ${sourceSlug}/future-me.md to promote.`);
-        }
-
-        // Extract the last entry (don't remove from source yet)
-        const lastEntry = entryChunks[entryChunks.length - 1];
-        const tsMatch = /\*\*(.+?)\*\*/.exec(lastEntry);
-        const timestamp = tsMatch ? tsMatch[1] : new Date().toISOString();
-        const captureText = lastEntry.replace(/\*\*.*?\*\*\n?/, "").trim();
-
-        // Write destination first — if this fails, source is untouched
-        mkdirSync(newBucketDir, { recursive: true });
-        const bucketMd = stringifyMatter(
-          { slug: newSlug, description, aliases: [], state: "active", "last-commit": "", repos: [] },
-          `\n# ${newSlug}\n\n${description}\n`,
-        );
-        writeFileSync(join(newBucketDir, "_bucket.md"), bucketMd);
-        writeFileSync(join(newBucketDir, "memory.md"), `# Memory — ${newSlug}\n`);
-        writeFileSync(join(newBucketDir, "future-me.md"), `# Future Me — ${newSlug}\n\nTangent captures parked here for later.\n`);
-        writeCapture(vaultPath, newSlug, captureText, timestamp);
-
-        // Destination succeeded — now remove from source
-        const lastIndex = chunks.lastIndexOf(lastEntry);
-        chunks.splice(lastIndex, 1);
-        writeFileSync(futureFile, chunks.join("\n---\n"));
-
+        const result = promoteFutureMe(vaultPath, sourceSlug, newSlug, description);
         return {
           content: [
             { type: "text" as const, text: `Promoted to ${newSlug}. 🎯` },
           ],
-          details: { sourceSlug, newSlug, captureText },
+          details: { sourceSlug, newSlug, captureText: result.captureText },
+        };
+      },
+    });
+
+    // --- Tool: Write watcher alert ---
+    api.registerTool({
+      name: "clawback_write_watcher",
+      label: "Write Watcher Alert",
+      description:
+        "Append an alert entry to a watcher file (pr-alerts.md or dev-comments.md) in the " +
+        "vault's watchers/ directory. Use from pr-watcher and dev-watcher scheduled jobs.",
+      parameters: Type.Object({
+        filename: Type.String({ description: "Watcher file: pr-alerts.md or dev-comments.md" }),
+        entry: Type.String({ description: "Markdown entry to append (include timestamp, details)" }),
+      }),
+      async execute(_toolCallId, params) {
+        const { filename, entry } = params as { filename: string; entry: string };
+        const vaultPath = getVaultPath(api.pluginConfig);
+        writeWatcher(vaultPath, filename, entry);
+        return {
+          content: [{ type: "text" as const, text: `Alert written to watchers/${filename}` }],
+          details: { filename },
+        };
+      },
+    });
+
+    // --- Tool: Read watcher alerts ---
+    api.registerTool({
+      name: "clawback_read_watcher",
+      label: "Read Watcher Alerts",
+      description:
+        "Read all entries from a watcher file (pr-alerts.md or dev-comments.md). " +
+        "Use from the surface skill to evaluate alerting rules.",
+      parameters: Type.Object({
+        filename: Type.String({ description: "Watcher file: pr-alerts.md or dev-comments.md" }),
+      }),
+      async execute(_toolCallId, params) {
+        const { filename } = params as { filename: string };
+        const vaultPath = getVaultPath(api.pluginConfig);
+        const content = readWatcher(vaultPath, filename);
+        return {
+          content: [{ type: "text" as const, text: content || "No alerts yet." }],
+          details: { filename, empty: !content },
+        };
+      },
+    });
+
+    // --- Tool: Write draft ---
+    api.registerTool({
+      name: "clawback_write_draft",
+      label: "Write Draft",
+      description:
+        "Write a generated draft to a bucket's drafts/ directory. Creates a timestamped file " +
+        "like drafts/dev-submission-2026-04-20T14-30-00.md. Use from the draft skill.",
+      parameters: Type.Object({
+        slug: Type.String({ description: "Bucket slug" }),
+        templateName: Type.String({ description: "Template name (e.g., dev-submission)" }),
+        content: Type.String({ description: "Full draft content in markdown" }),
+      }),
+      async execute(_toolCallId, params) {
+        const { slug, templateName, content } = params as {
+          slug: string; templateName: string; content: string;
+        };
+        const vaultPath = getVaultPath(api.pluginConfig);
+        const filename = writeDraft(vaultPath, slug, templateName, content);
+        return {
+          content: [{ type: "text" as const, text: `Draft written: ${slug}/drafts/${filename}` }],
+          details: { slug, filename },
+        };
+      },
+    });
+
+    // --- Tool: Write conflicts ---
+    api.registerTool({
+      name: "clawback_write_conflicts",
+      label: "Write Conflicts",
+      description:
+        "Replace _conflicts.md at the vault root with updated conflict entries. Use during " +
+        "the memory consolidation pass when contradictions are found that cannot be auto-resolved.",
+      parameters: Type.Object({
+        content: Type.String({ description: "Full new _conflicts.md content (replaces everything)" }),
+      }),
+      async execute(_toolCallId, params) {
+        const { content } = params as { content: string };
+        const vaultPath = getVaultPath(api.pluginConfig);
+        writeConflicts(vaultPath, content);
+        return {
+          content: [{ type: "text" as const, text: "Conflicts file updated." }],
+          details: {},
+        };
+      },
+    });
+
+    // --- Tool: Read conflicts ---
+    api.registerTool({
+      name: "clawback_read_conflicts",
+      label: "Read Conflicts",
+      description:
+        "Read _conflicts.md from the vault root. Use during the consolidation pass to see " +
+        "existing unresolved conflicts before writing updates.",
+      parameters: Type.Object({}),
+      async execute() {
+        const vaultPath = getVaultPath(api.pluginConfig);
+        const content = readConflicts(vaultPath);
+        return {
+          content: [{ type: "text" as const, text: content || "No conflicts." }],
+          details: { empty: !content },
+        };
+      },
+    });
+
+    // --- Tool: Update last commit timestamp ---
+    api.registerTool({
+      name: "clawback_update_last_commit",
+      label: "Update Last Commit",
+      description:
+        "Update a bucket's last-commit timestamp in _bucket.md frontmatter. Use from " +
+        "pr-watcher after checking the user's latest commit on repos tied to the bucket.",
+      parameters: Type.Object({
+        slug: Type.String({ description: "Bucket slug" }),
+        timestamp: Type.String({ description: "ISO timestamp of the last commit" }),
+      }),
+      async execute(_toolCallId, params) {
+        const { slug, timestamp } = params as { slug: string; timestamp: string };
+        const vaultPath = getVaultPath(api.pluginConfig);
+        updateLastCommit(vaultPath, slug, timestamp);
+        return {
+          content: [{ type: "text" as const, text: `${slug} last-commit → ${timestamp}` }],
+          details: { slug, timestamp },
         };
       },
     });

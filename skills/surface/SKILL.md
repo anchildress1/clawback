@@ -5,7 +5,6 @@ description: >
   new DEV.to comments, or challenge announcements. Use when watcher data has been updated
   and needs to be evaluated against alerting rules.
 user-invocable: false
-disable-model-invocation: true
 metadata:
   openclaw:
     emoji: "🔔"
@@ -13,19 +12,63 @@ metadata:
 
 # Surface
 
-You evaluate alerting rules against watcher data and send Discord pings. Called after watcher jobs complete — NOT invoked by the model directly.
+You evaluate alerting rules against watcher data and send Discord pings. Run after watcher jobs complete. Schedule via:
 
-## Rules (evaluate all, send matching)
+```
+openclaw cron add --name "surface" --cron "0 */2 * * *" --message "Run surface alerts: evaluate all rules and send Discord pings" --session isolated
+```
 
-1. **PR awaiting >24h** — a PR in `watchers/pr-alerts.md` has been awaiting action for more than 24 hours → Discord ping with repo, PR number, and age.
-2. **Stale bucket** — a bucket in `active` state has no captures in the last N days → Discord ping: "No activity in <slug> for N days."
-3. **Stale contribution** — a bucket is `active` but the user has no git commits in the last N days on any repo listed in that bucket's `_bucket.md` → Discord ping: "<slug>: still current? No commits in N days."
-4. **New DEV comment** — a new entry in `watchers/dev-comments.md` since last surface run → Discord ping with author and preview.
-5. **New DEV notification** — a `[notification]` entry in `watchers/dev-comments.md` → Discord ping.
-6. **New challenge** — the dev-watcher flagged a new challenge → Discord ping.
+## Step 1 — Gather data
 
-## Delivery constraints
+1. Call `clawback_read_manifest` to get all buckets with their states, last-commit timestamps, and repos.
+2. Call `clawback_read_watcher` with `pr-alerts.md` and `dev-comments.md`.
 
-- Send each alert exactly once. Track sent alerts in `~/.clawback/cache.json`.
-- Do NOT batch alerts into a single message. One ping per alert.
+## Step 2 — Evaluate rules (all of them, every run)
+
+### Rule 1: PR awaiting >24h
+
+For each entry in `pr-alerts.md`: if the PR's `createdAt` is more than 24 hours ago and it's still open, send:
+
+> 👀 PR awaiting action >24h: `<repo>` #<number> — <title>
+
+### Rule 2: Stale bucket (no captures)
+
+For each bucket in `active` state: if the bucket has no captures in the last 7 days (check file modification time via `exec`: `stat -f %m <captures.md>`), send:
+
+> 💤 No activity in **<slug>** for <N> days.
+
+### Rule 3: Stale contribution (no commits)
+
+For each bucket in `active` state with repos configured: if `last-commit` in `_bucket.md` is older than 7 days, send:
+
+> 🔇 **<slug>**: still current? No commits in <N> days.
+
+### Rule 4: New DEV comment
+
+For each `[comment]` entry in `dev-comments.md` not yet surfaced, send:
+
+> 💬 New comment on **<slug>** by @<author>: "<preview>"
+
+### Rule 5: New DEV notification
+
+For each `[notification]` entry not yet surfaced, send:
+
+> 🔔 DEV notification: <summary>
+
+### Rule 6: New challenge
+
+For each `[challenge]` entry not yet surfaced, send:
+
+> 🏆 New DEV challenge: <title> — <url>
+
+## Step 3 — Deliver
+
+Send each alert as a separate Discord message. Do NOT batch.
+
+Track sent alerts by content hash in `~/.clawback/cache.json` to avoid duplicate delivery.
+
+## Rules
+
+- Send each alert exactly once.
 - Do NOT suppress alerts. If the rule matches, send it.
+- Do NOT ask the user before sending — just send.

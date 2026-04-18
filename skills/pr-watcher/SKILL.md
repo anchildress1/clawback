@@ -4,7 +4,6 @@ description: >
   Scheduled background job that checks GitHub repos for pull requests needing review or action.
   Also tracks contribution timestamps per project bucket. Do NOT invoke manually — runs on a schedule.
 user-invocable: false
-disable-model-invocation: true
 metadata:
   openclaw:
     emoji: "👀"
@@ -17,22 +16,45 @@ metadata:
 
 # PR Watcher
 
-You are a scheduled job. You poll GitHub repos and write results to the vault. You are NOT invoked by the model — you run on a cron schedule.
+You are a scheduled job. You poll GitHub repos and write results to the vault. Run on a cron schedule via:
 
-Uses `steipete/github` skill (wraps `gh` CLI) for all GitHub queries. Do NOT call the GitHub API directly.
+```
+openclaw cron add --name "pr-watcher" --cron "*/15 * * * *" --message "Run PR watcher: check all buckets for open PRs and update contribution timestamps" --session isolated
+```
 
 ## Job 1: PR alerts
 
-For each bucket with configured repos (listed in `_bucket.md` frontmatter `repos[]`):
-1. Use `gh pr list --state open --json ...` to find PRs awaiting action (review requested, changes requested, CI failing).
-2. Write new alerts to `watchers/pr-alerts.md` with timestamp, repo, PR number, and status.
-3. Skip PRs already in the alert history.
+For each bucket returned by `clawback_read_manifest` that has repos configured:
+
+1. For each repo in the bucket's `repos[]` array, use the `exec` tool to run:
+   ```
+   gh pr list --repo <repo> --state open --json number,title,author,createdAt,reviewRequests,labels --limit 20
+   ```
+2. Filter for PRs that need action: review requested from the user, changes requested, or CI failing.
+3. For each qualifying PR, build a markdown entry:
+   ```
+   \n---\n**<ISO timestamp>** | `<repo>` #<number> — <title> (<status>) by @<author>\n
+   ```
+4. Check existing alerts via `clawback_read_watcher` with `pr-alerts.md` — skip PRs already logged.
+5. Call `clawback_write_watcher` with `pr-alerts.md` and each new entry.
 
 ## Job 2: Contribution timestamps
 
 For each bucket with configured repos:
-1. Use `gh api` to check the user's last commit timestamp on each repo.
-2. Write the most recent timestamp to the bucket's `_bucket.md` frontmatter `last-commit` field.
+
+1. Use the `exec` tool to run:
+   ```
+   gh api repos/<owner>/<repo>/commits?author=<username>&per_page=1 --jq '.[0].commit.author.date'
+   ```
+2. Take the most recent timestamp across all repos in the bucket.
+3. Call `clawback_update_last_commit` with the bucket slug and timestamp.
+
+## After both jobs complete
+
+Sync the vault using the `exec` tool:
+```
+cd <vault-path> && git add -A && git commit -m "watcher: pr-alerts update" && git pull --rebase --autostash && git push
+```
 
 ## Data consumers
 

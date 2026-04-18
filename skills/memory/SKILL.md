@@ -45,14 +45,24 @@ You extract structured project state from captures and write it to git-synced ma
 
 ## Consolidation pass
 
-Triggered nightly and via `/consolidate` command:
-1. Read `_personal.md` via `clawback_read_personal_memory`.
-2. Read every bucket's `memory.md` via `clawback_read_bucket_file` for each bucket from `clawback_read_manifest`.
-3. Merge duplicate entries across files.
-4. Resolve contradictions by recency. If unresolvable, flag to `_conflicts.md`.
-5. Prune entries not referenced in the last N days.
-6. Write all updated files via `clawback_write_memory` and `clawback_write_personal_memory`.
-7. Sync the vault via `exec` tool: `git add -A && git commit -m "memory: consolidation pass" && git pull --rebase --autostash && git push` in the vault directory.
+Triggered nightly via cron and on-demand via `/consolidate` command:
+
+```
+openclaw cron add --name "memory-consolidate" --cron "0 3 * * *" --message "Run memory consolidation: merge duplicates, resolve contradictions, prune stale entries" --session isolated
+```
+
+### Steps:
+
+1. Call `clawback_read_personal_memory` to get current `_personal.md`.
+2. Call `clawback_read_manifest` to get all buckets.
+3. For each bucket, call `clawback_read_bucket_file` with `memory.md`.
+4. Call `clawback_read_conflicts` to see any existing unresolved conflicts.
+5. **Merge duplicates**: if two buckets have the same fact, keep the more specific version.
+6. **Resolve contradictions by recency**: if `memory.md` entry A (Apr 14) says X and entry B (Apr 16) says Y, keep B.
+7. **Flag unresolvable contradictions**: if recency doesn't clearly resolve (same date, different contexts), call `clawback_write_conflicts` with both versions and source info.
+8. **Prune stale entries**: remove entries not referenced in captures from the last 14 days.
+9. Write updated files via `clawback_write_memory` (per bucket) and `clawback_write_personal_memory`.
+10. Sync the vault via `exec` tool: `git add -A && git commit -m "memory: consolidation pass" && git pull --rebase --autostash && git push` in the vault directory.
 
 ## Personal memory signals
 
